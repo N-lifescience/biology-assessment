@@ -1,0 +1,18 @@
+packages:
+  - "apps/*"
+
+# E: is exFAT, which does not support symlinks; pnpm's default linker fails.
+nodeLinker: hoisted
+
+overrides:
+  postcss: 8.5.19
+  sharp: 0.35.3
+
+allowBuilds:
+  esbuild: true
+  # The catalog build does not import these native/protobuf install hooks.
+  # Keep them disabled rather than implicitly approving third-party scripts.
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: true
+  unrs-resolver: true
