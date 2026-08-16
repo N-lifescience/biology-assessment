@@ -1,7 +1,3 @@
-# TODO(biology-fork): 이 파일은 발행된 생명과학 카탈로그(data/publish/biology_assessment_catalog*.sqlite)를
-# 전제로 한다. 아직 생명과학 파이프라인이 데이터를 만들지 않아 현재는 실패한다.
-# 가짜 데이터를 만들지 말고, 첫 카탈로그 발행 뒤 실제 수치·과목명으로 기대값을 다시 잡는다.
-
 import json
 import shutil
 import sqlite3
@@ -28,20 +24,16 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
         case_id = str(case[0])
         case_region = str(case[1])
         connection.executescript(SCHEMA_SQL)
+        # Every real case already has its own pipeline-produced detail rows;
+        # replace them with this test's fixture so item_order/title assertions
+        # below aren't racing a real sibling item for the same case_id.
+        connection.execute("DELETE FROM case_detail_status WHERE case_id = ?", (case_id,))
+        connection.execute("DELETE FROM assessment_item_rankings WHERE item_id IN "
+                            "(SELECT item_id FROM assessment_items WHERE case_id = ?)", (case_id,))
+        connection.execute("DELETE FROM assessment_items WHERE case_id = ?", (case_id,))
         connection.execute(
-            "INSERT INTO case_detail_status VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                case_id,
-                "hwpx",
-                "subject_section",
-                "bounded",
-                1,
-                1,
-                json.dumps(["함수 모델링 탐구"], ensure_ascii=False),
-                1200,
-                "b" * 64,
-                0,
-            ),
+            "INSERT INTO case_detail_status VALUES (?, ?, ?, ?)",
+            (case_id, "hwpx", "bounded", 1200),
         )
         connection.execute(
             """
@@ -75,8 +67,8 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
         connection.execute(
             """
             INSERT INTO assessment_items VALUES (
-                ?, ?, 1, ?, ?, 'heading', 'bounded', 10, 1210,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, 1, ?, ?, 'heading', 'bounded',
+                ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             (
@@ -90,21 +82,10 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
                 "20점",
                 "20%",
                 json.dumps(["[12대수01-01]"], ensure_ascii=False),
+                len(rubric_html),
                 zlib.compress(source_html.encode("utf-8")),
                 zlib.compress(rubric_html.encode("utf-8")),
-                len(source_html),
-                len(rubric_html),
             ),
-        )
-        connection.executescript(
-            """
-            CREATE TABLE assessment_item_rankings (
-                item_id TEXT PRIMARY KEY,
-                category TEXT NOT NULL,
-                priority_score INTEGER NOT NULL,
-                priority_signals_json TEXT NOT NULL
-            ) WITHOUT ROWID;
-            """
         )
         connection.execute(
             "INSERT INTO assessment_item_rankings VALUES (?, 'inquiry', 68, ?)",
@@ -161,7 +142,7 @@ def test_bundle_review_item_does_not_publish_source_html(tmp_path, monkeypatch) 
             """
             INSERT INTO assessment_items VALUES (
                 ?, ?, 1, '재검토 묶음', '재검토 묶음', 'section',
-                'bundle_review', 0, 500, '', '', '', '', '', '[]', ?, ?, 37, 37
+                'bundle_review', '', '', '', '', '', '[]', 37, ?, ?
             )
             """,
             (

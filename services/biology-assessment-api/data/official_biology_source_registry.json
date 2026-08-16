@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0.0",
+  "verified_on": "2026-08-17",
+  "interpretation": "교육부·NCIC 자료는 국가 교육과정과 성취수준의 권위 있는 근거이며, 학교알리미 평가계획은 학교별 실제 운영 사례를 보여 주는 별도 근거다.",
+  "layers": [
+    {
+      "level": 1,
+      "label": "국가 교육과정 원문",
+      "purpose": "과목의 성격·내용 체계·성취기준 원문 확인",
+      "authority": "교육부 고시"
+    },
+    {
+      "level": 2,
+      "label": "공식 성취수준·평가기준",
+      "purpose": "성취기준별 성취수준과 평가 방향 확인",
+      "authority": "NCIC·한국교육과정평가원"
+    },
+    {
+      "level": 3,
+      "label": "학교 수행평가 운영 사례",
+      "purpose": "과제·운영·루브릭의 실제 적용 경향 확인",
+      "authority": "학교알리미 공개 평가계획"
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "moe-2015-74-science-book-9",
+      "layer": 1,
+      "curriculum": "2015",
+      "provider": "교육부",
+      "title": "2015 개정 교육과정 고시(과학과 교육과정 별책 9)",
+      "document_type": "국가 교육과정",
+      "publication_date": "2015-09-23",
+      "identifier": "교육부 고시 제2015-74호",
+      "url": "https://www.moe.go.kr/boardCnts/viewRenew.do?M=0404&boardID=141&boardSeq=60747&lev=0&opType=N&s=moe&statusYN=C",
+      "verification_status": "official_landing_page_verified",
+      "service_use": "2015 개정 생명과학Ⅰ·Ⅱ 성취기준 원문 확인",
+      "redistribution": "링크와 출처 메타데이터만 제공"
+    },
+    {
+      "source_id": "ncic-2015-high-science-evaluation-criteria",
+      "layer": 2,
+      "curriculum": "2015",
+      "provider": "NCIC·한국교육과정평가원",
+      "title": "(고) 2015 개정 교육과정에 따른 평가기준 및 연구 보고서_과학과",
+      "document_type": "고등학교 과학과 평가기준",
+      "publication_date": "",
+      "identifier": "NCIC 평가기준 게시물 2012",
+      "url": "https://ncic.re.kr/bbs/standard/list.do",
+      "verification_status": "official_current_index_verified",
+      "service_use": "2015 개정 고등학교 생명과학Ⅰ·Ⅱ 평가기준 확인",
+      "redistribution": "링크와 출처 메타데이터만 제공"
+    },
+    {
+      "source_id": "moe-2022-33-science-book-9",
+      "layer": 1,
+      "curriculum": "2022",
+      "provider": "교육부",
+      "title": "2022 개정 초·중등학교 교육과정 고시(과학과 교육과정 별책 9)",
+      "document_type": "국가 교육과정",
+      "publication_date": "2022-12-22",
+      "identifier": "교육부 고시 제2022-33호",
+      "url": "https://www.moe.go.kr/boardCnts/viewRenew.do?boardID=141&boardSeq=93458&lev=0&page=1&s=moe",
+      "verification_status": "official_landing_page_verified",
+      "service_use": "2022 개정 생명과학 성취기준 원문 확인",
+      "redistribution": "링크와 출처 메타데이터만 제공"
+    },
+    {
+      "source_id": "ncic-2022-high-science-achievement-levels",
+      "layer": 2,
+      "curriculum": "2022",
+      "provider": "NCIC·한국교육과정평가원",
+      "title": "(고) 2022 개정 교육과정에 따른 성취수준 및 연구 보고서_과학과",
+      "document_type": "고등학교 과학과 공통·선택과목 성취수준",
+      "publication_date": "",
+      "identifier": "NCIC 성취수준 게시물 2039",
+      "url": "https://ncic.re.kr/bbs/standard/list.do",
+      "verification_status": "official_current_index_verified",
+      "service_use": "2022 개정 통합과학1·과학탐구실험1·생명과학 등 성취수준 확인",
+      "redistribution": "링크와 출처 메타데이터만 제공"
+    },
+    {
+      "source_id": "schoolinfo-biology-assessment-plans-2026",
+      "layer": 3,
+      "curriculum": "2015·2022",
+      "provider": "학교알리미",
+      "title": "2026학년도 교과별 교수·학습 및 평가계획 공개 자료",
+      "document_type": "학교별 평가계획",
+      "publication_date": "2026",
+      "identifier": "학교알리미 4-가 공개 항목",
+      "url": "https://www.schoolinfo.go.kr/",
+      "verification_status": "collection_and_integrity_verified",
+      "service_use": "학교별 수행평가 운영 사례와 전국 수집 범위 확인",
+      "redistribution": "전체 첨부파일은 로컬 보존하며, 서비스에는 과목 경계와 개인정보 안전 검토를 통과한 생명과학 수행평가 표 구간의 안전 변환본과 공개 페이지 링크를 제공"
+    }
+  ]
+}

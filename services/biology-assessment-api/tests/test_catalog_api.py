@@ -1,7 +1,3 @@
-# TODO(biology-fork): 이 파일은 발행된 생명과학 카탈로그(data/publish/biology_assessment_catalog*.sqlite)를
-# 전제로 한다. 아직 생명과학 파이프라인이 데이터를 만들지 않아 현재는 실패한다.
-# 가짜 데이터를 만들지 말고, 첫 카탈로그 발행 뒤 실제 수치·과목명으로 기대값을 다시 잡는다.
-
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -14,36 +10,38 @@ def test_subjects_expose_all_course_groups_and_keep_ambiguity_separate() -> None
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["total"] == 28
+    assert payload["total"] == 9
     assert any(
-        item["curriculum"] == "2022" and item["subject"] == "대수" and item["documents"] == 1821
+        item["curriculum"] == "2022" and item["subject"] == "생명과학" and item["documents"] == 1416
         for item in payload["items"]
     )
-    assert any(item["curriculum_ambiguous"] for item in payload["items"])
+    # No 2015/2022-ambiguous subject exists in the current collection: every
+    # subject name in the target course groups maps to exactly one curriculum.
+    assert not any(item["curriculum_ambiguous"] for item in payload["items"])
     assert "뜻이 아닙니다" in payload["caution"]
 
 
-def test_trends_return_verified_subject_counts_and_small_sample_warning() -> None:
-    algebra = client.get("/api/v1/trends", params={"curriculum": "2022", "subject": "대수"})
-    calculus_two = client.get("/api/v1/trends", params={"curriculum": "2022", "subject": "미적분Ⅱ"})
+def test_trends_return_verified_subject_counts_and_action_tags() -> None:
+    biology = client.get("/api/v1/trends", params={"curriculum": "2022", "subject": "생명과학"})
+    biology_one = client.get("/api/v1/trends", params={"curriculum": "2015", "subject": "생명과학Ⅰ"})
 
-    assert algebra.status_code == 200
-    algebra_item = algebra.json()["items"][0]
-    assert algebra_item["documents"] == 1821
-    assert algebra_item["coverage"]["found"] == 1731
-    assert algebra_item["small_sample"] is False
-    assert any(tag["tag"] == "탐구" for tag in algebra_item["action_tags"])
+    assert biology.status_code == 200
+    biology_item = biology.json()["items"][0]
+    assert biology_item["documents"] == 1416
+    assert biology_item["coverage"]["found"] == 1348
+    assert biology_item["small_sample"] is False
+    assert any(tag["tag"] == "탐구" for tag in biology_item["action_tags"])
 
-    assert calculus_two.status_code == 200
-    calculus_item = calculus_two.json()["items"][0]
-    assert calculus_item["documents"] == 8
-    assert calculus_item["small_sample"] is True
+    assert biology_one.status_code == 200
+    biology_one_item = biology_one.json()["items"][0]
+    assert biology_one_item["documents"] == 53
+    assert biology_one_item["small_sample"] is False
 
 
 def test_cases_filter_by_course_without_exposing_local_paths_or_full_text() -> None:
     response = client.get(
         "/api/v1/cases",
-        params={"curriculum": "2015", "subject": "수학Ⅱ", "limit": 3},
+        params={"curriculum": "2015", "subject": "생명과학Ⅱ", "limit": 3},
     )
 
     assert response.status_code == 200
@@ -51,7 +49,7 @@ def test_cases_filter_by_course_without_exposing_local_paths_or_full_text() -> N
     assert payload["total"] > 0
     assert len(payload["items"]) == 3
     for item in payload["items"]:
-        assert item["subject"] == "수학Ⅱ"
+        assert item["subject"] == "생명과학Ⅱ"
         assert item["curriculum"] == "2015"
         assert item["assessment_structure"]["basis"] == "source_detail"
         assert len(item["evidence_excerpt"]) <= 902
@@ -95,14 +93,14 @@ def test_curated_cases_use_transparent_evidence_priority() -> None:
 def test_cases_search_without_the_deploy_only_fts_tables() -> None:
     seed = client.get(
         "/api/v1/cases",
-        params={"curriculum": "2022", "subject": "미적분Ⅰ", "limit": 1},
+        params={"curriculum": "2022", "subject": "생명과학", "limit": 1},
     ).json()["items"][0]
 
     response = client.get(
         "/api/v1/cases",
         params={
             "curriculum": "2022",
-            "subject": "미적분Ⅰ",
+            "subject": "생명과학",
             "query": seed["primary_task_name"],
                 "limit": 30,
         },
@@ -113,7 +111,7 @@ def test_cases_search_without_the_deploy_only_fts_tables() -> None:
 
 
 def test_facets_offer_course_specific_regions_and_action_tags() -> None:
-    response = client.get("/api/v1/facets", params={"curriculum": "2022", "subject": "대수"})
+    response = client.get("/api/v1/facets", params={"curriculum": "2022", "subject": "생명과학"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -124,7 +122,7 @@ def test_facets_offer_course_specific_regions_and_action_tags() -> None:
 
 def test_region_facet_filters_the_library_and_preserves_its_count() -> None:
     facets = client.get(
-        "/api/v1/facets", params={"curriculum": "2022", "subject": "대수"}
+        "/api/v1/facets", params={"curriculum": "2022", "subject": "생명과학"}
     ).json()
     selected = facets["regions"][0]
 
@@ -132,7 +130,7 @@ def test_region_facet_filters_the_library_and_preserves_its_count() -> None:
         "/api/v1/cases",
         params={
             "curriculum": "2022",
-            "subject": "대수",
+            "subject": "생명과학",
             "region": selected["value"],
                 "limit": 30,
         },
@@ -147,7 +145,7 @@ def test_region_facet_filters_the_library_and_preserves_its_count() -> None:
 def test_case_detail_uses_stable_identifier_and_public_schoolinfo_source() -> None:
     search = client.get(
         "/api/v1/cases",
-        params={"curriculum": "2022", "subject": "미적분Ⅰ", "limit": 1},
+        params={"curriculum": "2022", "subject": "생명과학", "limit": 1},
     )
     case_id = search.json()["items"][0]["case_id"]
     detail = client.get(f"/api/v1/cases/{case_id}")
@@ -203,8 +201,8 @@ def test_official_sources_keep_authority_layers_separate() -> None:
     )
     assert any(
         source["curriculum"] == "2022"
-        and source["document_type"] == "고등학교 수학과 선택과목 성취수준"
-        and "미적분Ⅰ" in source["service_use"]
+        and source["document_type"] == "고등학교 과학과 공통·선택과목 성취수준"
+        and "생명과학" in source["service_use"]
         for source in payload["sources"]
     )
     schoolinfo = next(source for source in payload["sources"] if source["layer"] == 3)
