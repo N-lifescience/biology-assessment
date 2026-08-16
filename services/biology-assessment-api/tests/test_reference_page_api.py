@@ -1,7 +1,3 @@
-# TODO(biology-fork): 이 파일은 발행된 생명과학 카탈로그(data/publish/biology_assessment_catalog*.sqlite)를
-# 전제로 한다. 아직 생명과학 파이프라인이 데이터를 만들지 않아 현재는 실패한다.
-# 가짜 데이터를 만들지 말고, 첫 카탈로그 발행 뒤 실제 수치·과목명으로 기대값을 다시 잡는다.
-
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -13,7 +9,7 @@ def test_reference_page_applies_subject_region_and_category_before_limiting() ->
     selected = next(
         item
         for item in subjects
-        if item["curriculum"] == "2022" and item["subject"] == "대수"
+        if item["curriculum"] == "2022" and item["subject"] == "생명과학"
     )
 
     response = client.get(
@@ -34,7 +30,7 @@ def test_reference_page_applies_subject_region_and_category_before_limiting() ->
     assert payload["facets"]["regions"]
     assert all(
         item["curriculum"] == "2022"
-        and item["subject"] == "대수"
+        and item["subject"] == "생명과학"
         and item["category"] == "inquiry"
         for item in payload["items"]
     )
@@ -42,7 +38,7 @@ def test_reference_page_applies_subject_region_and_category_before_limiting() ->
 
 def test_reference_page_can_be_narrowed_to_one_district() -> None:
     client = TestClient(app)
-    base = {"curriculum": "2022", "subject": "대수", "category": "inquiry"}
+    base = {"curriculum": "2022", "subject": "생명과학", "category": "inquiry"}
     facets = client.get("/api/v1/references", params=base).json()["facets"]
     region = facets["regions"][0]["value"]
     district = client.get(

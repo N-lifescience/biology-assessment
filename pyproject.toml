@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["services/biology-assessment-api/tests"]
-pythonpath = ["services/biology-assessment-api"]
+pythonpath = [".", "services/biology-assessment-api"]
 addopts = "-q"
 
 [tool.ruff]
