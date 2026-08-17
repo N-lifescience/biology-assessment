@@ -78,8 +78,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           <div className="footerInner">
             <p>학교알리미 평가계획을 설계 근거로 활용하며, 최종 판단은 교사가 합니다.</p>
             <div className="footerMeta">
-              <span>제작 서아인</span>
-              <a href="mailto:ainssam@ai.cne.go.kr?subject=%EC%83%9D%EB%AA%85%EA%B3%BC%ED%95%99%20%EC%88%98%ED%96%89%ED%8F%89%EA%B0%80%20%EC%84%A4%EA%B3%84%20%EB%8F%84%EC%9A%B0%EB%AF%B8%20%EC%9E%90%EB%A3%8C%20%EC%A0%95%EC%A0%95%20%EC%9A%94%EC%B2%AD">자료 오류·정정·삭제 요청: ainssam@ai.cne.go.kr</a>
+              <span>제작 N의 생명과학</span>
+              <a href="https://www.instagram.com/n_life_science" target="_blank" rel="noreferrer">자료 오류·정정·삭제 요청: instagram.com/n_life_science</a>
               <Link href="/terms">이용·보호 안내</Link>
               <Link href="/privacy">개인정보 처리방침</Link>
               <VisitorCounter />

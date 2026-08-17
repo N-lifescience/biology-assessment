@@ -1,8 +1,8 @@
 const TDM_RESERVATION = {
   version: "1.0",
   policy: "reserved",
-  owner: "서아인",
-  contact: "ainssam@ai.cne.go.kr",
+  owner: "N의 생명과학",
+  contact: "https://www.instagram.com/n_life_science",
   scope: [
     "service code and design",
     "assessment selection and classification",
