@@ -20,6 +20,7 @@ from pathlib import Path
 from scripts.audit_biology_assessment_titles_full import audit_flags, confidence
 from scripts.biology_assessment_detail_parser import segment_subject_alignment
 from scripts.build_biology_assessment_publish_db import (
+    FIELD_STOP_LABELS,
     case_id_for,
     compact_text,
     html_table_grids,
@@ -63,6 +64,12 @@ def find_recovery_candidates(evidence_text: str, subject: str) -> list[dict]:
                     value = re.sub(r"\s+", " ", row[col_index + 1]).strip()
                     key = compact_text(value)
                     if not value or not key or key in seen or not TITLE_FRAGMENT_RE.fullmatch(value):
+                        continue
+                    # A header-only row (e.g. label "평가과제" next to another
+                    # header "배점") must not be read as label/value; a value
+                    # that is itself a label or a bare field name is never a
+                    # real title, no matter how it lines up positionally.
+                    if key in FIELD_STOP_LABELS or explicit_name_label(value):
                         continue
                     flags = audit_flags(value, "table")
                     grade = confidence(flags, "table", explicit_source_label=True)

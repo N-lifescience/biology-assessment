@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 from scripts.build_biology_assessment_publish_db import (
+    GENERIC_BARE_NOUNS,
     case_id_for,
     compact_text,
     derive_task_names,
@@ -38,11 +39,13 @@ FIELD_MARKER_TERMS = ("평가항목", "평가방법", "채점기준")
 SCORE_OR_QUANTITY_RE = re.compile(r"\d+\s*[~-]\s*\d+\s*(?:점|쪽|장|줄)")
 TASK_COMPLETION_SUFFIXES = ("하기", "보고서", "발표", "작성")
 TRAILING_PAREN_NUMBER_RE = re.compile(r"\s*\(\s*\d+\s*\)\s*$")
+LEADING_NUMBER_RE = re.compile(r"^\d+\s*[.)]\s*")
 
 
 def audit_flags(title: str, source: str) -> dict:
     text = re.sub(r"\s+", " ", title).strip()
     text_no_paren = TRAILING_PAREN_NUMBER_RE.sub("", text)
+    text_no_paren = LEADING_NUMBER_RE.sub("", text_no_paren)
     compact = compact_text(text_no_paren)
     words = [word for word in text_no_paren.split(" ") if word]
     return {
@@ -53,6 +56,10 @@ def audit_flags(title: str, source: str) -> dict:
         "is_generic_structural": compact in GENERIC_STRUCTURAL_TERMS,
         "is_other_subject": compact in OTHER_SUBJECT_TERMS,
         "is_hard_reject_compound": compact in HARD_REJECT_COMPOUND_TERMS,
+        # A bare method noun ("포트폴리오", "배점") next to an explicit label is
+        # still not a title -- the label just says what *kind* of thing is
+        # missing, same denylist derive_task_names already trusts.
+        "is_generic_bare_method": compact in GENERIC_BARE_NOUNS,
         "has_field_marker": any(marker in compact for marker in FIELD_MARKER_TERMS),
         "has_score_or_quantity": bool(SCORE_OR_QUANTITY_RE.search(text)),
         "is_method_enumeration": text.count(",") >= 2,
@@ -67,6 +74,7 @@ def confidence(flags: dict, source: str, explicit_source_label: bool = False) ->
         or flags["is_generic_structural"]
         or flags["is_other_subject"]
         or flags["is_hard_reject_compound"]
+        or flags["is_generic_bare_method"]
         or flags["has_field_marker"]
         or flags["has_score_or_quantity"]
         or flags["is_method_enumeration"]

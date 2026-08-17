@@ -701,7 +701,14 @@ def assessment_structure(evidence: str, task_name: str, sources: dict[str, str])
                 if not row:
                     continue
                 label = compact_text(row[0])
-                following = next((cell for cell in row[1:] if cell.strip()), "")
+                following = next(
+                    (
+                        cell
+                        for cell in row[1:]
+                        if cell.strip() and compact_text(cell) not in FIELD_STOP_LABELS
+                    ),
+                    "",
+                )
                 if not following:
                     continue
                 if not structure["overview"] and label in OVERVIEW_LABELS:
