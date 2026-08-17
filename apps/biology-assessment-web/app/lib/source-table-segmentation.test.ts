@@ -190,4 +190,17 @@ describe("segmentSourceTables", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("strips script tags, inline event handlers, and javascript: URLs before rendering", () => {
+    const html = `<table>${row("평가영역명", "탐구")}${row("수행과제", "보고서")}</table>
+      <script>alert(1)</script>
+      <img src="x" onerror="alert(2)">
+      <a href="javascript:alert(3)">링크</a>`;
+
+    const result = segmentSourceTables(html);
+
+    expect(result.html).not.toContain("<script");
+    expect(result.html).not.toContain("onerror");
+    expect(result.html).not.toContain("javascript:");
+  });
 });
