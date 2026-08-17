@@ -1,7 +1,3 @@
-# TODO(biology-fork): 이 파일은 scripts/의 생명과학 파이프라인 규칙(과제명 정규화·제목 감사·상세 파서)을
-# 검증한다. 픽스처와 기대값이 아직 수학 규칙 그대로다. scripts/ 재작성이 끝난 뒤
-# 생명과학 과제명·과목 표현으로 다시 작성한다. 통과시키려고 규칙을 느슨하게 바꾸지 않는다.
-
 from scripts.audit_unresolved_biology_assessment_titles import (
     TITLE_FRAGMENT_RE,
     explicit_name_label,
@@ -24,7 +20,7 @@ def test_title_recovery_promotes_only_direct_source_verified_titles() -> None:
         "candidates": [
             {
                 "case_id": "case-1",
-                "candidate": "실생활 함수 모델링 보고서",
+                "candidate": "실생활 생태 모델링 보고서",
                 "confidence": "high",
                 "detection": "table_row",
                 "subject_alignment": "expected",
@@ -34,7 +30,7 @@ def test_title_recovery_promotes_only_direct_source_verified_titles() -> None:
             },
             {
                 "case_id": "case-1",
-                "candidate": "실생활 함수 모델링 보고서",
+                "candidate": "실생활 생태 모델링 보고서",
                 "confidence": "high",
                 "detection": "table_row",
                 "subject_alignment": "expected",
@@ -77,7 +73,7 @@ def test_title_recovery_promotes_only_direct_source_verified_titles() -> None:
 
     selected, skipped = candidates_by_case(audit)
 
-    assert selected == {"case-1": ["실생활 함수 모델링 보고서"]}
+    assert selected == {"case-1": ["실생활 생태 모델링 보고서"]}
     assert skipped == {
         "missing_case_or_title": 1,
         "not_source_verified_high": 1,

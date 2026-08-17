@@ -24,7 +24,9 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import html
 import json
+import re
 import sqlite3
 import zlib
 from html.parser import HTMLParser
@@ -118,6 +120,7 @@ CREATE TABLE assessment_items (
     source_html_zlib BLOB,
     rubric_html_zlib BLOB
 );
+CREATE INDEX idx_assessment_items_case_id ON assessment_items(case_id);
 
 CREATE TABLE assessment_item_rankings (
     item_id TEXT PRIMARY KEY,
@@ -206,6 +209,532 @@ def html_tables(value: str) -> list[list[list[str]]]:
     return extractor.tables
 
 
+def compact_text(value: str) -> str:
+    """Collapse whitespace/punctuation for label and dedup comparisons."""
+
+    return re.sub(r"[^0-9A-Za-z가-힣ⅠⅡⅢⅣⅤ]", "", value)
+
+
+def plain_text(value: str) -> str:
+    """Flatten HTML (tables included) into pipe-joined lines for regex scanning.
+
+    Each table row becomes one ``cell | cell | cell`` line so downstream
+    label/value scanning can treat a real ``<table>`` row the same way as a
+    plain-text pseudo-row copied out of a PDF.
+    """
+
+    def render_table(match: re.Match[str]) -> str:
+        lines = []
+        for table in html_tables(match.group(0)):
+            for row in table:
+                cells = [re.sub(r"\s+", " ", cell).strip() for cell in row]
+                cells = [cell for cell in cells if cell]
+                if cells:
+                    lines.append(" | ".join(cells))
+        return "\n" + "\n".join(lines) + "\n"
+
+    text = re.sub(r"<table\b.*?</table>", render_table, value, flags=re.I | re.S)
+    text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+# --- task-name normalization -------------------------------------------------
+
+LEADING_NUMBERING_RE = re.compile(r"^(?:\d+\s*\.\s*|[IVX]{1,4}\s*\.\s*)+")
+LEADING_LABEL_RE = re.compile(
+    r"^★?\s*(?:수행평가명|수행평가영역|수행평가과제명|수행평가|평가영역|과제명)"
+    r"\s*[:：\-–—]?\s*"
+)
+TRAILING_PAREN_NUMBER_RE = re.compile(r"\s*\(\s*\d+\s*\)\s*$")
+TRAILING_COUNT_RE = re.compile(r"\s*\d+\s*회\s*$")
+TRAILING_SCORE_SUFFIX_RE = re.compile(r"\s*[:：]\s*[0-9][0-9.,%~점\s]*$")
+
+# ponytail: only the one PDF word-split observed in fixtures is repaired here;
+# extend this map if another glued-then-split word turns up.
+STRAY_SPACE_JOIN_RE = {re.compile(r"적\s+용"): "적용"}
+
+# Known multi-char tokens used to re-segment a run of Korean text that a PDF/
+# HWP converter glued together with no spaces at all. A chunk is only ever
+# rewritten when it can be *fully* consumed by these tokens end to end, so an
+# unrelated compound (e.g. "수학칼럼쓰기") that only partially matches is left
+# untouched rather than partially split.
+TASK_NAME_WORD_DICTIONARY = (
+    "이용한",
+    "모델링", "프로젝트", "보고서",
+    "독서", "기반", "탐구", "활동", "해결", "교과", "융합",
+    "도서", "문제", "분석", "만들기", "풀이", "주제", "발표",
+    "생명과학", "생태계", "보전", "방안", "돌연변이", "생성",
+    "식물", "세포", "관찰", "실험",
+)
+
+
+def _segment_glued_chunk(chunk: str) -> str:
+    tokens: list[str] = []
+    position = 0
+    while position < len(chunk):
+        match = next(
+            (
+                word
+                for word in TASK_NAME_WORD_DICTIONARY
+                if chunk.startswith(word, position)
+            ),
+            None,
+        )
+        if match is None:
+            return chunk
+        tokens.append(match)
+        position += len(match)
+    return " ".join(tokens) if len(tokens) >= 2 else chunk
+
+
+HTML_ATTR_ARTIFACT_RE = re.compile(r'(?:\w+\s+)?(?:row|col|l)?span\s*=\s*"[^"]*"\s*>?')
+GFEDC_ARTIFACT_RE = re.compile(r"\bgfedc\b")
+
+
+def normalize_task_name(value: str) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    text = HTML_ATTR_ARTIFACT_RE.sub("", text)
+    text = GFEDC_ARTIFACT_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = LEADING_NUMBERING_RE.sub("", text)
+    text = LEADING_LABEL_RE.sub("", text)
+    for pattern, replacement in STRAY_SPACE_JOIN_RE.items():
+        text = pattern.sub(replacement, text)
+    for _ in range(2):
+        text = TRAILING_SCORE_SUFFIX_RE.sub("", text)
+        text = TRAILING_COUNT_RE.sub("", text)
+        text = TRAILING_PAREN_NUMBER_RE.sub("", text)
+    text = text.strip()
+    chunks = [_segment_glued_chunk(chunk) for chunk in text.split(" ") if chunk]
+    return " ".join(chunks)
+
+
+# --- task-name rejection ------------------------------------------------------
+
+CHECKBOX_RE = re.compile(r"[☑☐□◻■]")
+STAR_MARK_RE = re.compile(r"[★☆※]")
+LEADING_ROMAN_RE = re.compile(r"^[IVX]{1,4}\s*\.\s*")
+MID_ENUMERATION_RE = re.compile(r"[가-힣]\s+\d+\s*\.\s*[가-힣]")
+SCORE_OR_CREDIT_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*[~-]\s*\d+(?:\.\d+)?\s*점"
+    r"|\d+\s*점\s*[x×]\s*\d"
+    r"|=\s*\d+\s*점"
+    r"|\(\s*\d+\s*학점\s*\)"
+    r"|^(?:반영\s*만점|배점|영역\s*만점)"
+    r"|\d+(?:\.\d+)?\s*점\s*이하"
+)
+EXAM_LABEL_RE = re.compile(r"^\d*\s*차?\s*(?:정기)?\s*시험(?:\([^)]*\))?$")
+ADMIN_TERM_RE = re.compile(
+    r"부정행위|결시자|미응시자|학적\s*변동|성적\s*처리|이의\s*신청|"
+    r"출제\s*의도|학기말\s*합계|재응시|결과물\s*보존"
+)
+DECLARATIVE_SENTENCE_RE = re.compile(r"(?:다|음|함|됨)\.\s*(?:\([^)]*\))?$")
+FIELD_LABEL_MARKERS = (
+    "평가방법",
+    "평가항목",
+    "학생유의사항",
+    "점수부여",
+    "배점기준",
+    "채점기준",
+    "반영만점",
+    "영역만점",
+)
+REJECT_ENDING_WORDS = (
+    "평가",
+    "항목",
+    "기준",
+    "사항",
+    "횟수",
+    "신장",
+    "내용",
+    "흥미도",
+)
+SHORT_COMMA_LIST_RE = re.compile(r"^[가-힣·]{2,10}(?:\s*,\s*[가-힣·]{2,10}){1,3}$")
+SHORT_AND_PAIR_RE = re.compile(r"^[가-힣·]{2,8}\s*및\s*[가-힣·]{2,8}$")
+DANGLING_PARTICLE_RE = re.compile(r"[가-힣]\s[을를이가은는의과와도로에]$")
+GENERIC_BARE_NOUNS = {
+    "프로젝트",
+    "포트폴리오",
+    "보고서",
+    "발표",
+    "탐구",
+    "조사",
+    "활동",
+    "과제",
+    "수행평가",
+    "제작",
+    "글쓰기",
+    "토론",
+    "관찰",
+}
+# ponytail: literal denylist for phrases that don't reduce to any general
+# rule above (course/unit names, one-off generic labels). Extend it, don't
+# loosen a rule above, when a new false-accept turns up.
+COMPACT_REJECT_SET = {
+    "과제탐구",
+    "교수학습활동",
+    "관찰평가포트폴리오",
+    "추가적인분량탐구활동",
+    "화법과작문과정형포트폴리오제작",
+}
+
+
+def task_name_is_rejected(text: str) -> bool:
+    stripped = re.sub(r"\s+", " ", text).strip()
+    if not stripped:
+        return True
+    compact = compact_text(stripped)
+    if compact in COMPACT_REJECT_SET:
+        return True
+    if CHECKBOX_RE.search(stripped) or STAR_MARK_RE.search(stripped):
+        return True
+    if LEADING_ROMAN_RE.match(stripped):
+        return True
+    if MID_ENUMERATION_RE.search(stripped):
+        return True
+    if any(marker in compact for marker in FIELD_LABEL_MARKERS):
+        return True
+    if SCORE_OR_CREDIT_RE.search(stripped) or EXAM_LABEL_RE.match(stripped):
+        return True
+    if ADMIN_TERM_RE.search(stripped) or DECLARATIVE_SENTENCE_RE.search(stripped):
+        return True
+    if any(stripped.endswith(word) for word in REJECT_ENDING_WORDS):
+        return True
+    if SHORT_COMMA_LIST_RE.match(stripped) or SHORT_AND_PAIR_RE.match(stripped):
+        return True
+    if stripped.count(",") >= 2 and "및" in stripped:
+        return True
+    if DANGLING_PARTICLE_RE.search(stripped):
+        return True
+    chunks = stripped.split(" ")
+    if chunks and all(compact_text(chunk) in GENERIC_BARE_NOUNS for chunk in chunks):
+        return True
+    return False
+
+
+class _HTMLSpanTableExtractor(HTMLParser):
+    """Like ``_HTMLTableExtractor`` but keeps each cell's rowspan/colspan."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[tuple[str, int, int]]]] = []
+        self._tables: list[list[list[tuple[str, int, int]]]] = []
+        self._rows: list[list[tuple[str, int, int]]] = []
+        self._cells: list[list[str]] = []
+        self._cell_spans: list[tuple[int, int]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag == "table":
+            self._tables.append([])
+        elif tag == "tr" and self._tables:
+            self._rows.append([])
+        elif tag in ("td", "th") and self._rows:
+            self._cells.append([])
+            attr_map = {key.lower(): (value or "") for key, value in attrs}
+
+            def span(name: str) -> int:
+                try:
+                    return max(1, int(attr_map.get(name, "1")))
+                except ValueError:
+                    return 1
+
+            self._cell_spans.append((span("rowspan"), span("colspan")))
+        elif tag == "br" and self._cells:
+            self._cells[-1].append(" ")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "br" and self._cells:
+            self._cells[-1].append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in ("td", "th") and self._cells:
+            text = "".join(self._cells.pop()).strip()
+            rowspan, colspan = self._cell_spans.pop()
+            if self._rows:
+                self._rows[-1].append((text, rowspan, colspan))
+        elif tag == "tr" and self._rows:
+            row = self._rows.pop()
+            if self._tables:
+                self._tables[-1].append(row)
+        elif tag == "table" and self._tables:
+            self.tables.append(self._tables.pop())
+
+    def handle_data(self, data: str) -> None:
+        if self._cells:
+            self._cells[-1].append(data)
+
+
+def _expand_table_grid(rows: list[list[tuple[str, int, int]]]) -> list[list[str]]:
+    grid: list[dict[int, str]] = []
+    pending: dict[int, tuple[str, int]] = {}
+    for row in rows:
+        grid_row: dict[int, str] = {}
+        col = 0
+        cell_index = 0
+        max_col_needed = max(pending.keys(), default=-1)
+        while cell_index < len(row) or col <= max_col_needed:
+            if col in pending:
+                text, remaining = pending[col]
+                grid_row[col] = text
+                if remaining <= 1:
+                    del pending[col]
+                else:
+                    pending[col] = (text, remaining - 1)
+                col += 1
+                continue
+            if cell_index < len(row):
+                text, rowspan, colspan = row[cell_index]
+                cell_index += 1
+                for offset in range(colspan):
+                    grid_row[col + offset] = text
+                    if rowspan > 1:
+                        pending[col + offset] = (text, rowspan - 1)
+                col += colspan
+                max_col_needed = max(max_col_needed, col - 1)
+            else:
+                col += 1
+        grid.append(grid_row)
+    width = max((max(row.keys(), default=-1) for row in grid), default=-1) + 1
+    return [[row.get(col, "") for col in range(width)] for row in grid]
+
+
+def html_table_grids(value: str) -> list[list[list[str]]]:
+    """Parse HTML tables into a rowspan/colspan-expanded grid per table."""
+
+    extractor = _HTMLSpanTableExtractor()
+    extractor.feed(value)
+    extractor.close()
+    return [_expand_table_grid(rows) for rows in extractor.tables]
+
+
+TASK_LABEL_MARKERS = (
+    "수행평가명",
+    "수행평가과제명",
+    "수행평가영역",
+    "수행평가과제",
+    "평가과제명",
+    "평가과제",
+    "평가영역",
+    "과제명",
+    "수행평가",
+)
+FIELD_STOP_LABELS = {
+    compact_text(label)
+    for label in (
+        "반영비율",
+        "성취기준",
+        "평가시기",
+        "평가방법",
+        "배점",
+        "만점",
+        "총점",
+        "채점기준",
+        "평가요소",
+        "평가항목",
+        "평가내용",
+        "평가방식",
+        "평가만점",
+        "성취수준",
+        "기준영역",
+        "구분",
+        "시기",
+        "학기",
+        "영역만점",
+        "부여점수",
+    )
+}
+FOREIGN_COURSE_HEADING_RE = re.compile(r"교수학습.*평가.*(?:계획|운영)")
+HEADING_RE = re.compile(r"^[ \t]*#+[ \t]+(.+?)[ \t]*$", re.M)
+
+
+def _looks_like_task_label(cell: str) -> bool:
+    compact = compact_text(cell)
+    return bool(compact) and any(marker in compact for marker in TASK_LABEL_MARKERS)
+
+
+def _localize_subject_section(evidence: str, subject: str) -> str:
+    """Return only the part of ``evidence`` that plausibly belongs to ``subject``.
+
+    A combined Schoolinfo attachment often lists several subjects' plans one
+    after another under a heading such as ``# ...과 교수학습 및 평가 운영
+    계획``. Only headings that look like such a course-plan boundary are used
+    to cut the document; a heading that is merely internal document structure
+    (e.g. ``## 1) 과제 이름``) never truncates the section.
+    """
+
+    headings = [(m.start(), m.group(1)) for m in HEADING_RE.finditer(evidence)]
+    course_headings = [
+        (start, text)
+        for start, text in headings
+        if FOREIGN_COURSE_HEADING_RE.search(compact_text(text))
+    ]
+    subject_key = compact_text(subject)
+    matching = [
+        (start, text) for start, text in course_headings if subject_key and subject_key in compact_text(text)
+    ]
+    if matching:
+        start = matching[0][0]
+        end = len(evidence)
+        for h_start, h_text in course_headings:
+            if h_start > start and (not subject_key or subject_key not in compact_text(h_text)):
+                end = h_start
+                break
+        return evidence[start:end].strip()
+    if course_headings:
+        return evidence[: course_headings[0][0]].strip()
+    return evidence.strip()
+
+
+def _table_row_candidates(table_html: str) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    for grid in html_table_grids(table_html):
+        num_rows = len(grid)
+        width = len(grid[0]) if grid else 0
+        for row_index in range(num_rows):
+            for col_index in range(width):
+                cell = grid[row_index][col_index]
+                if not cell or not _looks_like_task_label(cell):
+                    continue
+                following = [
+                    grid[row_index][c]
+                    for c in range(col_index + 1, width)
+                    if grid[row_index][c].strip()
+                ]
+                header_only = bool(following) and all(
+                    compact_text(v) in FIELD_STOP_LABELS for v in following
+                )
+                if following and not header_only:
+                    for value in following:
+                        if compact_text(value) in FIELD_STOP_LABELS or _looks_like_task_label(value):
+                            break
+                        candidates.append((value, "table"))
+                    continue
+                distinct: list[str] = []
+                seen_keys: set[str] = set()
+                for next_row in range(row_index + 1, num_rows):
+                    value = grid[next_row][col_index].strip()
+                    if not value:
+                        continue
+                    key = compact_text(value)
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        distinct.append(value)
+                if len(distinct) == 1:
+                    candidates.append((distinct[0], "table"))
+    return candidates
+
+
+def derive_task_names(
+    evidence: str, seen: list[str], subject: str
+) -> tuple[list[str], str, dict[str, str]]:
+    local_text = _localize_subject_section(evidence, subject)
+    seen_keys = {compact_text(normalize_task_name(item)) for item in seen}
+
+    table_spans = [
+        (match.start(), match.end())
+        for match in re.finditer(r"<table\b.*?</table>", local_text, re.I | re.S)
+    ]
+    non_table_text = local_text
+    for start, end in reversed(table_spans):
+        non_table_text = non_table_text[:start] + "\n" + non_table_text[end:]
+
+    raw_candidates: list[tuple[str, str]] = []
+    for start, end in table_spans:
+        raw_candidates.extend(_table_row_candidates(local_text[start:end]))
+
+    for line in non_table_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if " | " in line:
+            cells = [cell.strip() for cell in line.split("|")]
+            for index, cell in enumerate(cells):
+                if (
+                    _looks_like_task_label(cell)
+                    and index + 1 < len(cells)
+                    and cells[index + 1].strip()
+                ):
+                    raw_candidates.append((cells[index + 1].strip(), "context"))
+        elif not table_spans and not line.startswith("#"):
+            raw_candidates.append((line, "section"))
+
+    accepted: dict[str, tuple[str, str, int]] = {}
+    for order, (raw, source) in enumerate(raw_candidates):
+        name = normalize_task_name(raw)
+        if not name or task_name_is_rejected(name):
+            continue
+        key = compact_text(name)
+        if key in seen_keys or key in accepted:
+            continue
+        accepted[key] = (name, source, order)
+
+    ordered = sorted(accepted.values(), key=lambda item: (-len(compact_text(item[0])), item[2]))
+    names = [item[0] for item in ordered]
+    sources = {item[0]: item[1] for item in ordered}
+    return names, local_text, sources
+
+
+OVERVIEW_LABELS = {compact_text(label) for label in ("평가개요", "평가내용", "수행과제", "과제내용")}
+METHOD_LABELS = {compact_text(label) for label in ("평가방법", "방법")}
+WEIGHT_LABELS = {compact_text(label) for label in ("반영비율", "점수반영비율", "평가비율")}
+STANDARD_CODE_RE = re.compile(r"\[(\d{1,2}[가-힣A-Za-z]+\d{2}-\d{2})\]")
+CHECKED_METHOD_RE = re.compile(r"☑\s*([^☑□]+)")
+
+
+def assessment_structure(evidence: str, task_name: str, sources: dict[str, str]) -> dict:
+    structure: dict = {
+        "basis": "table" if sources.get(task_name) == "table" else "text",
+        "overview": "",
+        "methods": [],
+        "weight": "",
+        "standards": [],
+        "criteria": [],
+    }
+    for table_match in re.finditer(r"<table\b.*?</table>", evidence, re.I | re.S):
+        for grid in html_table_grids(table_match.group(0)):
+            for row in grid:
+                if not row:
+                    continue
+                label = compact_text(row[0])
+                following = next((cell for cell in row[1:] if cell.strip()), "")
+                if not following:
+                    continue
+                if not structure["overview"] and label in OVERVIEW_LABELS:
+                    structure["overview"] = following.strip()
+                if label in METHOD_LABELS:
+                    structure["methods"] = [
+                        match.strip() for match in CHECKED_METHOD_RE.findall(following)
+                    ]
+                if label in WEIGHT_LABELS:
+                    structure["weight"] = re.sub(
+                        r"\s*/\s*", " · ", re.sub(r"\s+", " ", following)
+                    ).strip()
+    structure["standards"] = STANDARD_CODE_RE.findall(evidence)
+    return structure
+
+
+CATEGORY_KEYWORDS = (
+    ("독서", "reading"),
+    ("탐구", "inquiry"),
+    ("발표", "presentation"),
+    ("포트폴리오", "portfolio"),
+    ("보고서", "reading"),
+)
+
+
+def assessment_category(task_name: str, structure: dict, evidence: str) -> str:
+    compact = compact_text(task_name)
+    for keyword, category in CATEGORY_KEYWORDS:
+        if keyword in compact:
+            return category
+    return ""
+
+
 def case_id_for(source_key: str, subject: str) -> str:
     return hashlib.sha1(f"{source_key}:{subject}".encode("utf-8")).hexdigest()[:24]
 
@@ -269,6 +798,18 @@ def load_cases(
         markers = record.get("marker_counts") or {}
         review_score = int(record.get("review_score") or record.get("evidence_score") or 0)
         evidence_text = str(record.get("evidence_text") or "")
+
+        # The upstream reprocessing pipeline usually already supplies
+        # task_name_candidates; derive_task_names only fills in when that
+        # pipeline found nothing, so an already-verified name is never
+        # second-guessed.
+        sources: dict[str, str] = {}
+        if not task_names and evidence_text:
+            task_names, _, sources = derive_task_names(evidence_text, [], subject)
+
+        structure = assessment_structure(evidence_text, task_names[0] if task_names else "", sources)
+        summary_overview = structure["overview"] or evidence_text[:600]
+
         rows.append(
             (
                 case_id_for(source_key, subject),
@@ -290,10 +831,10 @@ def load_cases(
                 int(markers.get("assessment_method") or 0),
                 review_score,
                 evidence_text[:600],
-                evidence_text[:600],
-                "[]",
-                "",
-                "[]",
+                summary_overview,
+                json.dumps(structure["methods"], ensure_ascii=False),
+                structure["weight"],
+                json.dumps(structure["standards"], ensure_ascii=False),
                 "[]",
                 "catalog_only",
                 category_for(action_tags),

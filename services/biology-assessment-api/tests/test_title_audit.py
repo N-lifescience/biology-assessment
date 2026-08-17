@@ -1,7 +1,3 @@
-# TODO(biology-fork): 이 파일은 scripts/의 생명과학 파이프라인 규칙(과제명 정규화·제목 감사·상세 파서)을
-# 검증한다. 픽스처와 기대값이 아직 수학 규칙 그대로다. scripts/ 재작성이 끝난 뒤
-# 생명과학 과제명·과목 표현으로 다시 작성한다. 통과시키려고 규칙을 느슨하게 바꾸지 않는다.
-
 import pytest
 from scripts.audit_biology_assessment_titles_full import audit_flags, confidence
 
@@ -9,11 +5,11 @@ from scripts.audit_biology_assessment_titles_full import audit_flags, confidence
 @pytest.mark.parametrize(
     "title",
     [
-        "이차방정식과 이차함수를 연결하여 그 관계를 예시를 들어 설명하기",
-        "확률과 통계 학습 내용구조화하기",
-        "수학 주제 탐구 발표",
-        "수학 용어 탐구 보고서 (2)",
-        "주제 선정 및 탐구 계획서 작성",
+        "생태계와 개체군 사이의 상호작용을 예시를 들어 설명하기",
+        "생태 조사 결과를 그래프로 구조화하기",
+        "생명과학 주제 탐구 발표",
+        "생명과학 용어 탐구 보고서 (2)",
+        "주제 선정 및 관찰 계획서 작성",
     ],
 )
 def test_source_grounded_task_titles_are_supported(title: str) -> None:
@@ -35,11 +31,11 @@ def test_rubric_rows_are_not_supported_as_task_titles(title: str) -> None:
 
 
 def test_unit_name_without_a_task_signal_requires_review() -> None:
-    assert confidence(audit_flags("다항식", "table"), "table") == "review"
+    assert confidence(audit_flags("광합성", "table"), "table") == "review"
 
 
 def test_exact_explicit_source_label_can_confirm_a_short_official_name() -> None:
-    flags = audit_flags("다항식", "table")
+    flags = audit_flags("광합성", "table")
     assert (
         confidence(flags, "table", explicit_source_label=True) == "supported"
     )
@@ -65,7 +61,7 @@ def test_explicit_source_label_does_not_override_hard_rejections(title: str) -> 
         "직무",
         "수행평가",
         "II",
-        "공통수학2 전체",
+        "생명과학Ⅱ 전체",
     ],
 )
 def test_field_values_and_period_labels_cannot_be_confirmed_as_titles(title: str) -> None:
