@@ -30,7 +30,9 @@ ROUGH_OVERVIEW_RE = re.compile(
     r"매우\s*(?:부족|미흡)|현저히|보이지\s*않음|평가\(채점\)\s*기준|^\s*\d+\s*$"
 )
 UNCONFIRMED_BUNDLE_TITLE = "수행평가명 미확정 · 원문 묶음"
-_BLOCK_TAGS = {"br", "tr", "td", "th", "table", "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
+_BLOCK_TAGS = {
+    "br", "tr", "td", "th", "table", "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+}
 
 
 class _PlainTextExtractor(HTMLParser):
