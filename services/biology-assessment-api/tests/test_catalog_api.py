@@ -23,7 +23,9 @@ def test_subjects_expose_all_course_groups_and_keep_ambiguity_separate() -> None
 
 def test_trends_return_verified_subject_counts_and_action_tags() -> None:
     biology = client.get("/api/v1/trends", params={"curriculum": "2022", "subject": "생명과학"})
-    biology_one = client.get("/api/v1/trends", params={"curriculum": "2015", "subject": "생명과학Ⅰ"})
+    biology_one = client.get(
+        "/api/v1/trends", params={"curriculum": "2015", "subject": "생명과학Ⅰ"}
+    )
 
     assert biology.status_code == 200
     biology_item = biology.json()["items"][0]

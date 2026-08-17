@@ -11,8 +11,10 @@ sentence or a field value that merely sits in the same table position.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
+import sqlite3
 from pathlib import Path
 
 from scripts.build_biology_assessment_publish_db import (
@@ -126,18 +128,103 @@ def audit_catalog(catalog_path: Path):
             }
 
 
+def audit_database(database: Path):
+    """Same grading, run over the titles the detail DB actually publishes.
+
+    ``assessment_items`` is the post-derivation product of the same pipeline,
+    so ``title_basis`` already records what ``derive_task_names`` returned as
+    the candidate's ``source``: a ``table`` basis means a source-authored label
+    cell pointed at the title, while ``heading``/``unbounded_bundle`` mean it
+    was read off a bare line with no label -- the ``section`` case.
+    """
+
+    connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            "SELECT i.item_id, i.case_id, i.title, i.title_basis, i.extraction_status, "
+            "c.subject FROM assessment_items i JOIN cases c ON c.case_id = i.case_id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    for row in rows:
+        title_source = "table" if row["title_basis"].startswith("table") else "section"
+        flags = audit_flags(row["title"], title_source)
+        yield {
+            "item_id": row["item_id"],
+            "case_id": row["case_id"],
+            "subject": row["subject"],
+            "title": row["title"],
+            "title_basis": row["title_basis"],
+            "extraction_status": row["extraction_status"],
+            "source": title_source,
+            "confidence": confidence(
+                flags, title_source, explicit_source_label=title_source != "section"
+            ),
+        }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--catalog", type=Path, help="candidate-title catalog JSONL")
+    parser.add_argument("--database", type=Path, help="publish detail sqlite")
+    parser.add_argument("--output", type=Path, help="one audited title per line (JSONL)")
+    parser.add_argument("--summary", type=Path, help="grade counts (JSON)")
+    parser.add_argument("--queue", type=Path, help="non-supported titles for review (CSV)")
     args = parser.parse_args()
+    if bool(args.catalog) == bool(args.database):
+        parser.error("pass exactly one of --catalog or --database")
+    if not any((args.output, args.summary, args.queue)):
+        parser.error("pass at least one of --output, --summary, --queue")
 
+    rows = audit_catalog(args.catalog) if args.catalog else audit_database(args.database)
     counts = {"supported": 0, "review": 0, "reject": 0}
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as handle:
-        for row in audit_catalog(args.catalog):
+    by_status: dict[str, dict[str, int]] = {}
+    queued: list[dict] = []
+    output = None
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        output = args.output.open("w", encoding="utf-8")
+    try:
+        for row in rows:
             counts[row["confidence"]] += 1
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            status = row.get("extraction_status")
+            if status:
+                by_status.setdefault(status, dict.fromkeys(counts, 0))[row["confidence"]] += 1
+            if row["confidence"] != "supported":
+                queued.append(row)
+            if output:
+                output.write(json.dumps(row, ensure_ascii=False) + "\n")
+    finally:
+        if output:
+            output.close()
+
+    if args.summary:
+        args.summary.parent.mkdir(parents=True, exist_ok=True)
+        args.summary.write_text(
+            json.dumps(
+                {
+                    "titles": sum(counts.values()),
+                    "confidence": counts,
+                    "by_extraction_status": by_status,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    if args.queue:
+        fields = [
+            "item_id", "case_id", "subject", "title", "title_basis",
+            "source", "extraction_status", "confidence",
+        ]
+        args.queue.parent.mkdir(parents=True, exist_ok=True)
+        with args.queue.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows({field: row.get(field, "") for field in fields} for row in queued)
 
     print(f"supported={counts['supported']} review={counts['review']} reject={counts['reject']}")
 

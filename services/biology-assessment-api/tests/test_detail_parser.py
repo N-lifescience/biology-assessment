@@ -22,6 +22,8 @@ from scripts.biology_assessment_detail_parser import (
     parse_assessment_section,
     segment_subject_alignment,
 )
+
+
 def test_subject_code_alignment_does_not_confuse_math_one_and_two() -> None:
     math_two = "<table><tr><td>[12생과Ⅱ01-04] 연속함수의 성질</td></tr></table>"
     math_one = "<table><tr><td>[12생과Ⅰ01-01] 지수함수와 로그함수</td></tr></table>"
@@ -288,7 +290,10 @@ def test_assessment_matrix_keeps_only_performance_assessment_columns() -> None:
 
     section = parse_assessment_section(source, "통합과학1")
 
-    assert [item.title for item in section.items] == ["생명과학 탐구 및 발표", "문제해결 포트폴리오"]
+    assert [item.title for item in section.items] == [
+        "생명과학 탐구 및 발표",
+        "문제해결 포트폴리오",
+    ]
     assert section.items[0].weight == "20%"
     assert section.items[0].method == "탐구 발표"
     assert "1차 정기고사" not in section.items[0].source_html
