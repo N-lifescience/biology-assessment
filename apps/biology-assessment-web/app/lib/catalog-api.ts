@@ -195,6 +195,21 @@ export type OfficialSourceRegistry = {
   sources: OfficialSource[];
 };
 
+export type ProductMetadata = {
+  product: string;
+  curricula: string[];
+  development_phase: string;
+  data_policy: string;
+  catalog_ready: boolean;
+  catalog_cases: number;
+  catalog_subject_groups: number;
+  plans_checked: number;
+  normalized_cases: number;
+  published_schools: number;
+  published_cases: number;
+  published_assessment_items: number;
+};
+
 export function apiParameters(values: Record<string, string | number | boolean | undefined>) {
   const parameters = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {

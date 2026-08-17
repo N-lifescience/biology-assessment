@@ -194,6 +194,11 @@ class ProductMetadata(StrictModel):
     catalog_ready: bool
     catalog_cases: int = Field(ge=0)
     catalog_subject_groups: int = Field(ge=0)
+    plans_checked: int = Field(ge=0)
+    normalized_cases: int = Field(ge=0)
+    published_schools: int = Field(ge=0)
+    published_cases: int = Field(ge=0)
+    published_assessment_items: int = Field(ge=0)
 
 
 class SourceLayer(StrictModel):

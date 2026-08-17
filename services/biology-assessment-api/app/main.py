@@ -167,6 +167,7 @@ def product_metadata() -> dict[str, object]:
     """화면이 사용하는 비민감 제품 범위만 제공한다."""
     catalog = repository()
     cases, subjects = catalog.catalog_counts()
+    snapshot = catalog.publication_snapshot()
     return {
         "product": "2026 생명과학 수행평가 아이디어 아카이브",
         "curricula": ["2015 개정", "2022 개정"],
@@ -175,6 +176,7 @@ def product_metadata() -> dict[str, object]:
         "catalog_ready": catalog.ready,
         "catalog_cases": cases,
         "catalog_subject_groups": subjects,
+        **snapshot,
     }
 
 

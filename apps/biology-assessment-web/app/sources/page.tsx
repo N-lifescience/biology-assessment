@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "../SiteLink";
 
+import DataSnapshot from "./DataSnapshot";
 import OfficialSources from "./OfficialSources";
 
 export const metadata: Metadata = {
@@ -24,15 +25,8 @@ export default function SourcesPage() {
       </header>
 
       <section className="sourceSnapshot" aria-labelledby="snapshot-title">
-        <div><p className="eyebrow">검증 스냅숏 · 준비 중</p><h2 id="snapshot-title">현재 데이터 기준선</h2></div>
-        {/* TODO: 생명과학 파이프라인이 첫 카탈로그를 발행하면 실제 검증 수치로 교체한다. */}
-        <dl>
-          <div><dt>공개계획 확인 대상</dt><dd>—<small>곳</small></dd></div>
-          <div><dt>수집 정규화 사례</dt><dd>—<small>건</small></dd></div>
-          <div><dt>공개 확정 학교</dt><dd>—<small>곳</small></dd></div>
-          <div><dt>공개 확정 사례</dt><dd>—<small>건</small></dd></div>
-          <div><dt>공개 수행평가</dt><dd>—<small>건</small></dd></div>
-        </dl>
+        <div><p className="eyebrow">검증 스냅숏</p><h2 id="snapshot-title">현재 데이터 기준선</h2></div>
+        <DataSnapshot />
       </section>
 
       <section className="sourceProcess" aria-labelledby="process-title">
