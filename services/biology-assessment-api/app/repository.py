@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 import zlib
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,43 @@ ROUGH_OVERVIEW_RE = re.compile(
     r"매우\s*(?:부족|미흡)|현저히|보이지\s*않음|평가\(채점\)\s*기준|^\s*\d+\s*$"
 )
 UNCONFIRMED_BUNDLE_TITLE = "수행평가명 미확정 · 원문 묶음"
+_BLOCK_TAGS = {"br", "tr", "td", "th", "table", "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+
+class _PlainTextExtractor(HTMLParser):
+    """Collapse a scraped fragment's leftover HTML markup into plain text.
+
+    ``evidence_excerpt``/``summary_overview`` sometimes retain literal
+    ``<table>``/``<br>`` markup the extraction pipeline didn't convert. A
+    reader must never see a raw tag; this keeps the text and drops the tags,
+    inserting a space at each block boundary so words don't run together.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _BLOCK_TAGS:
+            self._chunks.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        self._chunks.append(data)
+
+    def text(self) -> str:
+        return "".join(self._chunks)
+
+
+def _plain_text(value: str) -> str:
+    if "<" not in value:
+        return value
+    parser = _PlainTextExtractor()
+    try:
+        parser.feed(value)
+        parser.close()
+    except Exception:
+        return value
+    return parser.text()
 
 
 def parse_json_list(value: object) -> list[Any]:
@@ -762,12 +800,27 @@ class CatalogRepository:
     @staticmethod
     def _case_item(row: sqlite3.Row) -> dict[str, object]:
         curriculum = str(row["curriculum"])
-        overview = re.sub(r"\s+", " ", str(row["summary_overview"])).strip()
+        # A precomputed verdict from annotate_case_subject_alignment.py: "other"
+        # means the excerpt's own achievement-standard code names a different
+        # subject than this case is filed under (a neighbouring subject's
+        # table was pulled in by mistake). Per SOURCE_POLICY.md's public
+        # boundary rule, that text is not published -- the school's official
+        # Schoolinfo link (source_url, kept below) stands in for it.
+        subject_confirmed = (
+            "subject_alignment" not in row.keys() or row["subject_alignment"] != "other"
+        )
+        overview = (
+            re.sub(r"\s+", " ", _plain_text(str(row["summary_overview"]))).strip()
+            if subject_confirmed
+            else ""
+        )
         if ROUGH_OVERVIEW_RE.search(overview):
             overview = ""
         title_basis = str(row["title_basis"])
-        primary_task_name = str(row["primary_task_name"])
-        task_names = [str(value) for value in parse_json_list(row["task_names_json"])]
+        primary_task_name = _plain_text(str(row["primary_task_name"])).strip()
+        task_names = [
+            _plain_text(str(value)).strip() for value in parse_json_list(row["task_names_json"])
+        ]
 
         # A bundle without a source-table title is useful for coverage, but its
         # legacy catalogue title can be a rubric heading or a neighbouring
@@ -800,7 +853,11 @@ class CatalogRepository:
                 "assessment_method": int(row["assessment_method_marker_count"]),
             },
             "evidence_score": int(row["review_score"]),
-            "evidence_excerpt": str(row["evidence_excerpt"]),
+            "evidence_excerpt": (
+                re.sub(r"\s+", " ", _plain_text(str(row["evidence_excerpt"]))).strip()
+                if subject_confirmed
+                else ""
+            ),
             "assessment_structure": {
                 "overview": overview,
                 "methods": [str(value) for value in parse_json_list(row["methods_json"])],
@@ -809,8 +866,16 @@ class CatalogRepository:
                     if str(row["weight_summary"]) in {"0점", "0%"}
                     else str(row["weight_summary"])
                 ),
-                "standards": [str(value) for value in parse_json_list(row["standards_json"])],
-                "criteria": [str(value) for value in parse_json_list(row["criteria_json"])],
+                "standards": (
+                    [str(value) for value in parse_json_list(row["standards_json"])]
+                    if subject_confirmed
+                    else []
+                ),
+                "criteria": (
+                    [str(value) for value in parse_json_list(row["criteria_json"])]
+                    if subject_confirmed
+                    else []
+                ),
                 "basis": title_basis,
             },
             "category": str(row["category"]),
