@@ -23,3 +23,11 @@ Thumbs.db
 # local env/secrets
 .env
 .env.local
+
+# dorms-check local tool state (regenerate with npx, not deliverable)
+/.dorms-check/
+/dorms-check.config.json
+/answers.json
+
+# TypeScript incremental build cache
+*.tsbuildinfo

@@ -85,6 +85,34 @@ function knownRepeatedHeader(row: HTMLTableRowElement) {
  * repeating an identical header row.  Merge only directly adjacent fragments
  * whose header cells and spans are exactly identical.
  */
+const DANGEROUS_ELEMENT_SELECTOR = "script, iframe, object, embed";
+const JAVASCRIPT_URL_RE = /^\s*javascript:/i;
+
+/**
+ * The source HTML comes from an automated PDF/HWP-to-table conversion of
+ * official documents, not from a live user, but nothing downstream verifies
+ * that conversion never emits a stray ``<script>``/``onerror=`` fragment
+ * before this reaches ``dangerouslySetInnerHTML``. Strip anything that could
+ * execute before this function does any other transform.
+ */
+function sanitizeDangerousMarkup(document: Document) {
+  for (const element of Array.from(document.body.querySelectorAll(DANGEROUS_ELEMENT_SELECTOR))) {
+    element.remove();
+  }
+  for (const element of Array.from(document.body.querySelectorAll("*"))) {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith("on")) {
+        element.removeAttribute(attribute.name);
+      } else if (
+        (name === "href" || name === "src") && JAVASCRIPT_URL_RE.test(attribute.value)
+      ) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  }
+}
+
 function mergeRepeatedHeaderTables(document: Document) {
   let mergedFragmentCount = 0;
   for (const table of Array.from(document.body.querySelectorAll("table"))) {
@@ -593,6 +621,7 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
   }
 
   const document = new DOMParser().parseFromString(value, "text/html");
+  sanitizeDangerousMarkup(document);
   const reconstructedCellCount = mergeSuffixContinuationTables(document);
   let gradeContinuationRowCount = mergeAchievementLevelContinuations(document);
   const mergedFragmentCount = mergeRepeatedHeaderTables(document);
