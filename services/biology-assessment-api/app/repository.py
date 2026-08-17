@@ -103,6 +103,46 @@ class CatalogRepository:
             subjects = int(connection.execute("SELECT COUNT(*) FROM subject_stats").fetchone()[0])
         return cases, subjects
 
+    def publication_snapshot(self) -> dict[str, int]:
+        """자료 안내 페이지의 검증 스냅숏 5개 수치. subject_stats.coverage_*는
+        과목마다 같은 학교알리미 평가계획 모집단을 기준으로 하므로 한 행만 합산한다."""
+        empty = {
+            "plans_checked": 0,
+            "normalized_cases": 0,
+            "published_schools": 0,
+            "published_cases": 0,
+            "published_assessment_items": 0,
+        }
+        if not self.ready:
+            return empty
+        with self.connect() as connection:
+            plans_checked = connection.execute(
+                "SELECT coverage_found + coverage_ambiguous + coverage_not_found"
+                " + coverage_offering_unknown + coverage_extraction_failed"
+                " FROM subject_stats LIMIT 1"
+            ).fetchone()
+            normalized_cases = connection.execute("SELECT COUNT(*) FROM cases").fetchone()[0]
+            published_schools = connection.execute(
+                "SELECT COUNT(DISTINCT c.school_name || '|' || c.region || '|' || c.district)"
+                " FROM cases c JOIN assessment_items a ON a.case_id = c.case_id"
+                " WHERE a.extraction_status = 'bounded'"
+            ).fetchone()[0]
+            published_cases = connection.execute(
+                "SELECT COUNT(DISTINCT c.case_id)"
+                " FROM cases c JOIN assessment_items a ON a.case_id = c.case_id"
+                " WHERE a.extraction_status = 'bounded'"
+            ).fetchone()[0]
+            published_items = connection.execute(
+                "SELECT COUNT(*) FROM assessment_items WHERE extraction_status = 'bounded'"
+            ).fetchone()[0]
+        return {
+            "plans_checked": int(plans_checked[0]) if plans_checked else 0,
+            "normalized_cases": int(normalized_cases),
+            "published_schools": int(published_schools),
+            "published_cases": int(published_cases),
+            "published_assessment_items": int(published_items),
+        }
+
     def subjects(self, curriculum: str | None = None) -> list[dict[str, object]]:
         sql = "SELECT * FROM subject_stats"
         parameters: tuple[object, ...] = ()
