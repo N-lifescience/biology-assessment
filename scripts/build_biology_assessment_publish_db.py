@@ -27,6 +27,7 @@ import hashlib
 import html
 import json
 import re
+import shutil
 import sqlite3
 import zlib
 from html.parser import HTMLParser
@@ -1099,14 +1100,6 @@ def main() -> None:
     args = parser.parse_args()
 
     build(
-        args.catalog_db,
-        args.catalog,
-        args.trends_json,
-        args.catalog_summary,
-        args.evidence_source,
-        args.school_district,
-    )
-    build(
         args.detail_db,
         args.catalog,
         args.trends_json,
@@ -1114,6 +1107,13 @@ def main() -> None:
         args.evidence_source,
         args.school_district,
     )
+    # 두 DB는 같은 인자로 만들면 내용이 완전히 같다. 한 번만 빌드하고 복사해
+    # evidence_source 스캔과 피크 메모리를 두 배로 쓰지 않는다.
+    # ponytail: 아직 파일 두 벌이 필요하다(배포 스테이징이 두 경로를 모두 읽음).
+    # 카탈로그를 detail 테이블 없이 만들려면 repository.cases()의
+    # source_status='confirmed' 분기에 테이블 존재 가드를 먼저 넣어야 한다.
+    args.catalog_db.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(args.detail_db, args.catalog_db)
 
 
 if __name__ == "__main__":

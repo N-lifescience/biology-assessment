@@ -359,7 +359,7 @@ def case_detail(
     tags=["catalog"],
 )
 def assessment_item(
-    item_id: Annotated[str, Path(pattern="^[0-9a-f]{28}$")],
+    item_id: Annotated[str, Path(pattern=r"^[0-9a-f]{24}-\d{1,3}$")],
 ) -> dict[str, object]:
     item = ready_detail_repository().assessment_item(item_id)
     if item is None:
