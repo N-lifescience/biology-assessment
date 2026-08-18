@@ -249,7 +249,10 @@ export async function fetchCatalog<T>(path: string, signal?: AbortSignal): Promi
     const payload = await response.json().catch(() => null);
     const mayRetry = TRANSIENT_RESPONSE_STATUSES.has(response.status) && attempt < 2;
     if (!mayRetry) {
-      throw new Error(payload?.detail ?? "자료를 불러오지 못했습니다.");
+      // FastAPI 422는 detail을 객체 배열로 준다. 문자열일 때만 그대로 보여준다.
+      throw new Error(
+        typeof payload?.detail === "string" ? payload.detail : "자료를 불러오지 못했습니다.",
+      );
     }
     await waitForRetry(300 * 2 ** attempt, signal);
   }

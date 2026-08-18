@@ -15,7 +15,6 @@ from app.main import app
 def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) -> None:
     database = tmp_path / "detail.sqlite"
     shutil.copyfile(settings.DEFAULT_DATABASE, database)
-    item_id = "a" * 28
     with sqlite3.connect(database) as connection:
         case = connection.execute(
             "SELECT case_id, region FROM cases WHERE region != '' ORDER BY case_id LIMIT 1"
@@ -23,6 +22,9 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
         assert case is not None
         case_id = str(case[0])
         case_region = str(case[1])
+        # 빌더가 실제로 만드는 형식: build_biology_assessment_publish_db 의
+        # f"{case_id}-{order}" (24자리 hex + '-' + 순번).
+        item_id = f"{case_id}-1"
         connection.executescript(SCHEMA_SQL)
         # Every real case already has its own pipeline-produced detail rows;
         # replace them with this test's fixture so item_order/title assertions
@@ -128,15 +130,20 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
     assert outside_region.status_code == 200
     assert outside_region.json()["items"] == []
 
-    assert client.get("/api/v1/assessment-items/" + "f" * 28).status_code == 404
+    # 경로 정규식은 빌더가 만드는 형식만 받아들여야 한다. 예전 "^[0-9a-f]{28}$"는
+    # 실제 item_id 전부를 422로 떨어뜨려 원문 상세가 통째로 깨졌다.
+    assert client.get("/api/v1/assessment-items/" + "f" * 24 + "-1").status_code == 404
+    assert client.get("/api/v1/assessment-items/" + "f" * 24 + "-66").status_code == 404
+    assert client.get("/api/v1/assessment-items/" + "f" * 28).status_code == 422
 
 
 def test_bundle_review_item_does_not_publish_source_html(tmp_path, monkeypatch) -> None:
     database = tmp_path / "bundle.sqlite"
     shutil.copyfile(settings.DEFAULT_DATABASE, database)
-    item_id = "c" * 28
     with sqlite3.connect(database) as connection:
         case_id = str(connection.execute("SELECT case_id FROM cases LIMIT 1").fetchone()[0])
+        # 실제 파이프라인 순번(최대 66)과 겹치지 않도록 높은 순번을 쓴다.
+        item_id = f"{case_id}-999"
         connection.executescript(SCHEMA_SQL)
         connection.execute(
             """

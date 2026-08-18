@@ -5,7 +5,7 @@ export function loadCompareItems(storage: Storage): string[] {
   try {
     const value = JSON.parse(storage.getItem(COMPARE_STORAGE_KEY) || "[]");
     if (!Array.isArray(value)) return [];
-    return value.filter((item): item is string => /^[0-9a-f]{28}$/.test(String(item))).slice(0, MAX_COMPARE_ITEMS);
+    return value.filter((item): item is string => /^[0-9a-f]{24}-\d{1,3}$/.test(String(item))).slice(0, MAX_COMPARE_ITEMS);
   } catch {
     return [];
   }

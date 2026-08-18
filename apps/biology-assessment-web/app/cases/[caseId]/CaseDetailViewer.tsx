@@ -33,6 +33,7 @@ export default function CaseDetailViewer({
   const [compareItems, setCompareItems] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [itemError, setItemError] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -63,11 +64,13 @@ export default function CaseDetailViewer({
     if (!selectedId || loadedItems[selectedId] || requestedItems.current.has(selectedId)) return;
     const controller = new AbortController();
     requestedItems.current.add(selectedId);
+    setItemError("");
     fetchCatalog<AssessmentItemDetail>(`assessment-items/${selectedId}`, controller.signal)
       .then((item) => setLoadedItems((current) => ({ ...current, [selectedId]: item })))
       .catch((reason: Error) => {
         requestedItems.current.delete(selectedId);
-        if (reason.name !== "AbortError") setError(reason.message);
+        // 항목 하나가 실패해도 케이스 정보와 원문 구간 목록은 계속 보여준다.
+        if (reason.name !== "AbortError") setItemError(reason.message);
       });
     return () => controller.abort();
   }, [loadedItems, selectedId]);
@@ -138,7 +141,10 @@ export default function CaseDetailViewer({
 
         <article className="assessmentSourcePaper">
           {selectedSummary ? <SourceFacts item={selectedItem || selectedSummary} detectedTitles={detail.detected_titles} /> : null}
-          {!selectedItem ? <p className="compactLoading">선택한 원문 표를 불러오고 있습니다.</p> : null}
+          {!selectedItem && itemError ? (
+            <div className="errorPanel" role="alert"><strong>이 원문 구간을 열지 못했습니다.</strong><p>{itemError}</p></div>
+          ) : null}
+          {!selectedItem && !itemError ? <p className="compactLoading">선택한 원문 표를 불러오고 있습니다.</p> : null}
           {selectedItem ? (
             <>
               <div className="sourcePaperTopline"><div><span>원문 추출 표</span><h2>{selectedItem.title === "수행평가 원문 구간" && detail.detected_titles.length === 1 ? detail.detected_titles[0] : selectedItem.title === "수행평가 원문 구간" && detail.detected_titles.length > 1 ? `수행평가명 ${detail.detected_titles.length}개 확인 · 원문 묶음` : selectedItem.title}</h2></div><small>{selectedItem.title_basis === "heading" ? "원문 제목에서 분리" : selectedItem.title_basis === "table" ? "원문 표의 평가명" : "평가명 확인 · 원문 경계 묶음"}</small></div>
