@@ -57,7 +57,9 @@ NEXT_NON_TASK_SECTION = re.compile(
     r"(?im)^(?:#{1,6}\s*)?(?:\d+|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+)[.)]\s*"
     r"(?:결시|학적|평가\s*결과|성적|최소\s*성취|기타)[^\n]*$"
 )
-TASK_ITEM_HEADING = re.compile(r"(?m)^\s*(?:#{1,6}\s*)?[가-하][.)]\s*([^\n<]{2,100})\s*$")
+TASK_ITEM_HEADING = re.compile(
+    r"(?m)^\s*(?:#{1,6}\s*)?[가나다라마바사아자차카타파하][.)]\s*([^\n<]{2,100})\s*$"
+)
 
 
 def mask_sensitive(text: str) -> str:

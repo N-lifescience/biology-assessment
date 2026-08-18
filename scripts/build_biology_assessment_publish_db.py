@@ -243,7 +243,9 @@ def plain_text(value: str) -> str:
 
 # --- task-name normalization -------------------------------------------------
 
-LEADING_NUMBERING_RE = re.compile(r"^(?:\d+\s*\.\s*|[IVX]{1,4}\s*\.\s*)+")
+LEADING_NUMBERING_RE = re.compile(
+    r"^(?:\d+\s*\.\s*|[IVX]{1,4}\s*\.\s*|[가나다라마바사아자차카타파하]\s*[.)]\s*)+"
+)
 LEADING_LABEL_RE = re.compile(
     r"^★?\s*(?:수행평가명|수행평가영역|수행평가과제명|수행평가|평가영역|과제명)"
     r"\s*[:：\-–—]?\s*"
@@ -316,6 +318,11 @@ def normalize_task_name(value: str) -> str:
 
 CHECKBOX_RE = re.compile(r"[☑☐□◻■]")
 STAR_MARK_RE = re.compile(r"[★☆※]")
+HTML_TAG_SHAPE_RE = re.compile(r"</|/>|<\s*[A-Za-z][^>]*>")
+# Bullet markers only count when they open a line/segment (leading or after
+# whitespace) -- a Korean word-separator dot ("소화·순환·호흡") uses the same
+# glyph mid-word and must not be mistaken for an enumerated list.
+BULLET_MARK_RE = re.compile(r"(?:^|\s)[▪∙◦‣•·]")
 LEADING_ROMAN_RE = re.compile(r"^[IVX]{1,4}\s*\.\s*")
 MID_ENUMERATION_RE = re.compile(r"[가-힣]\s+\d+\s*\.\s*[가-힣]")
 SCORE_OR_CREDIT_RE = re.compile(
@@ -331,7 +338,7 @@ ADMIN_TERM_RE = re.compile(
     r"부정행위|결시자|미응시자|학적\s*변동|성적\s*처리|이의\s*신청|"
     r"출제\s*의도|학기말\s*합계|재응시|결과물\s*보존"
 )
-DECLARATIVE_SENTENCE_RE = re.compile(r"(?:다|음|함|됨)\.\s*(?:\([^)]*\))?$")
+DECLARATIVE_SENTENCE_RE = re.compile(r"(?:다|음|함|됨)\.\s*(?:\([^)]*\))?(?:\s|$)")
 FIELD_LABEL_MARKERS = (
     "평가방법",
     "평가항목",
@@ -390,6 +397,14 @@ def task_name_is_rejected(text: str) -> bool:
     if compact in COMPACT_REJECT_SET:
         return True
     if CHECKBOX_RE.search(stripped) or STAR_MARK_RE.search(stripped):
+        return True
+    if HTML_TAG_SHAPE_RE.search(stripped):
+        return True
+    if stripped.startswith("[zip:"):
+        return True
+    if len(BULLET_MARK_RE.findall(stripped)) >= 2:
+        return True
+    if len(re.findall(r"\d{1,2}\s*\.\s*\d{1,2}\s*\([월화수목금토일]\)", stripped)) >= 2:
         return True
     if LEADING_ROMAN_RE.match(stripped):
         return True
@@ -673,7 +688,14 @@ def derive_task_names(
             continue
         accepted[key] = (name, source, order)
 
-    ordered = sorted(accepted.values(), key=lambda item: (-len(compact_text(item[0])), item[2]))
+    # "section" candidates are bare paragraph lines (no table/label anchor),
+    # so a long 평가 원칙 sentence out-scores a short real title on length
+    # alone -- rank labeled/table candidates first, longest-first only within
+    # the same source.
+    ordered = sorted(
+        accepted.values(),
+        key=lambda item: (item[1] == "section", -len(compact_text(item[0])), item[2]),
+    )
     names = [item[0] for item in ordered]
     sources = {item[0]: item[1] for item in ordered}
     return names, local_text, sources
@@ -806,10 +828,15 @@ def load_cases(
         review_score = int(record.get("review_score") or record.get("evidence_score") or 0)
         evidence_text = str(record.get("evidence_text") or "")
 
-        # The upstream reprocessing pipeline usually already supplies
-        # task_name_candidates; derive_task_names only fills in when that
-        # pipeline found nothing, so an already-verified name is never
-        # second-guessed.
+        # The upstream reprocessing pipeline's heading match (bare 가./나./다.
+        # list markers) also catches 평가 원칙 프리앰블 문장 that merely start
+        # with a matching syllable, not just real 과제명 headings -- run the
+        # same rejection rules used below so a policy sentence never lands as
+        # the displayed 수행평가명.
+        task_names = [normalize_task_name(name) for name in task_names]
+        task_names = [name for name in task_names if name and not task_name_is_rejected(name)]
+        task_names = list(dict.fromkeys(task_names))
+
         sources: dict[str, str] = {}
         if not task_names and evidence_text:
             task_names, _, sources = derive_task_names(evidence_text, [], subject)

@@ -1,11 +1,5 @@
 import Link from "./SiteLink";
-
-// TODO: 생명과학 파이프라인이 첫 카탈로그를 발행하면 실제 검증 수치로 교체한다.
-const metrics = [
-  { value: "—", label: "공개 확정 학교" },
-  { value: "—", label: "공개 수행평가" },
-  { value: "—", label: "공개 확정 사례" },
-];
+import HeroMetrics from "./HeroMetrics";
 
 const workflow = [
   {
@@ -42,21 +36,7 @@ export default function Home() {
           <p className="pilotNote"><span aria-hidden="true">●</span> 2015·2022 개정 생명과학 교과군 과목의 수행평가 사례를 탐색합니다.</p>
         </div>
 
-        <aside className="evidencePanel" aria-label="현재 데이터 기준선">
-          <div className="panelTopline">
-            <span>검증된 데이터 기준선</span>
-            <strong>준비 중</strong>
-          </div>
-          <dl className="metricList">
-            {metrics.map((metric) => (
-              <div key={metric.label}>
-                <dt>{metric.label}</dt>
-                <dd>{metric.value}</dd>
-              </div>
-            ))}
-          </dl>
-          <p>원문·과목 경계·개인정보 검토를 통과한 공개 자료 기준입니다. 전국 학교 전수나 과목 개설 현황을 뜻하지 않습니다.</p>
-        </aside>
+        <HeroMetrics />
       </section>
 
       <section className="workflowSection" aria-labelledby="workflow-title">
