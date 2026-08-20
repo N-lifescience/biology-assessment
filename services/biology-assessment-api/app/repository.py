@@ -71,6 +71,46 @@ def _plain_text(value: str) -> str:
     return parser.text()
 
 
+_SELECTED_BOX_RE = re.compile(r"[■☑☒✓✔]|□\s*[VvＶ]")
+_METHOD_DROP_RE = re.compile(
+    r"성취\s*기준|평가\s*기준|정기\s*시험|지필\s*평가|선택형|서답형|합계|"
+    r"^\s*\[?(?:10|12)[^\]]*\]?\s*$"
+)
+
+
+def display_methods(values: list[str]) -> list[str]:
+    """Render source 평가 방법 cells as the methods a reader can act on.
+
+    The source cells are kept verbatim in the publish DB, but a raw cell is
+    often a whole checkbox menu ("□ 서술·논술 ☑ 실험･실습 □ 기타"), a label that
+    leaked in from the neighbouring 성취기준 column, or an exam name. Only the
+    ticked options are the school's actual choice, so unticked options, leaked
+    labels, and exam names are left out of the published field rather than
+    presented as if the school selected them.
+    """
+
+    output: list[str] = []
+    for value in values:
+        text = re.sub(r"\s+", " ", _plain_text(str(value))).strip()
+        if not text:
+            continue
+        parts = [text]
+        if _SELECTED_BOX_RE.search(text):
+            parts = [
+                segment.strip(" ·|")
+                for segment in re.split(r"(?=[■☑☒✓✔□])", text)
+                if _SELECTED_BOX_RE.match(segment.strip())
+            ]
+            parts = [_SELECTED_BOX_RE.sub("", part).strip(" ·|") for part in parts]
+        for part in parts:
+            part = part.strip(" ·|")
+            if not part or _METHOD_DROP_RE.search(part):
+                continue
+            if part not in output:
+                output.append(part)
+    return output[:6]
+
+
 def parse_json_list(value: object) -> list[Any]:
     try:
         parsed = json.loads(str(value or "[]"))
@@ -862,7 +902,9 @@ class CatalogRepository:
             ),
             "assessment_structure": {
                 "overview": overview,
-                "methods": [str(value) for value in parse_json_list(row["methods_json"])],
+                "methods": display_methods(
+                    [str(value) for value in parse_json_list(row["methods_json"])]
+                ),
                 "weight": (
                     ""
                     if str(row["weight_summary"]) in {"0점", "0%"}
@@ -901,7 +943,7 @@ class CatalogRepository:
             "title_basis": str(row["title_basis"]),
             "extraction_status": str(row["extraction_status"]),
             "overview": str(row["overview"]),
-            "method": str(row["method"]),
+            "method": " · ".join(display_methods([str(row["method"])])),
             "timing": str(row["timing"]),
             "score": str(row["score"]),
             "weight": str(row["weight"]),

@@ -139,13 +139,18 @@ CREATE TABLE case_detail_status (
 """
 
 UNCONFIRMED_TASK_NAME = "구체적 과제명 미탐지"
+# (action tag, source-text pattern, category). The tag strings must stay equal
+# to the upstream keys in ``build_biology_assessment_evidence_index.ACTION_TAGS``
+# because ``cases.action_tags_json`` carries those exact strings; the patterns
+# repeat the upstream spellings so item-level text scanning tolerates the
+# spacing the source documents actually use ("생태 조사", "문제 해결").
 CATEGORY_TAG_ORDER = [
-    ("생태조사", "ecology"),
-    ("탐구", "inquiry"),
-    ("문제해결", "problem"),
-    ("발표", "presentation"),
-    ("포트폴리오", "portfolio"),
-    ("보고서", "reading"),
+    ("생태조사", re.compile(r"생태\s*조사|야외\s*(?:조사|관찰)"), "ecology"),
+    ("탐구", re.compile(r"탐구"), "inquiry"),
+    ("문제해결", re.compile(r"문제\s*해결"), "problem"),
+    ("발표", re.compile(r"발표"), "presentation"),
+    ("포트폴리오", re.compile(r"포트폴리오"), "portfolio"),
+    ("보고서", re.compile(r"보고서"), "reading"),
 ]
 # ponytail: a school count below this is treated as too small to publish
 # per-school detail confidently. No official threshold was handed off.
@@ -334,7 +339,9 @@ SCORE_OR_CREDIT_RE = re.compile(
     r"|^(?:반영\s*만점|배점|영역\s*만점)"
     r"|\d+(?:\.\d+)?\s*점\s*이하"
 )
-EXAM_LABEL_RE = re.compile(r"^\d*\s*차?\s*(?:정기)?\s*시험(?:\([^)]*\))?$")
+EXAM_LABEL_RE = re.compile(
+    r"^(?:제?\d*\s*[차회]?\s*)?(?:중간|기말|정기)?\s*(?:고사|시험)(?:\s*\([^)]*\))?$"
+)
 ADMIN_TERM_RE = re.compile(
     r"부정행위|결시자|미응시자|학적\s*변동|성적\s*처리|이의\s*신청|"
     r"출제\s*의도|학기말\s*합계|재응시|결과물\s*보존"
@@ -770,11 +777,18 @@ def case_id_for(source_key: str, subject: str) -> str:
 
 
 def category_for(action_tags: list[str]) -> str:
+    """Return the published category, or "" when no tag supports one.
+
+    An unmatched tag set means the source text showed none of the six seed
+    types.  Publishing those as ``inquiry`` would put unclassified work in the
+    주제탐구 tab, so they stay uncategorised instead.
+    """
+
     tags = set(action_tags)
-    for tag, category in CATEGORY_TAG_ORDER:
+    for tag, _, category in CATEGORY_TAG_ORDER:
         if tag in tags:
             return category
-    return "inquiry"
+    return ""
 
 
 def region_from_saved_path(saved_path: str) -> str:
@@ -934,31 +948,104 @@ def load_subject_stats(
     print(f"subject_stats={len(stats_rows)} subject_action_tags={len(tag_rows)}")
 
 
-def load_source_texts(evidence_source_path: Path, wanted_shas: set[str]) -> dict[str, str]:
-    texts: dict[str, str] = {}
-    for record in read_jsonl(evidence_source_path):
-        sha = str(record.get("sha256") or "")
-        if sha in wanted_shas and sha not in texts:
-            texts[sha] = str(record.get("text") or "")
-    return texts
-
-
 def item_category_and_signals(item) -> tuple[str, list[str]]:
-    """Mirror ``category_for`` at item granularity using the item's own text.
+    """Return the item's category and the evidence fields it actually has.
 
     Cases classify by their pre-extracted ``action_tags``; individual items
     have no such pre-extracted tags, so this scans the item's own title/
-    overview/method text for the same marker words instead.
+    overview/method text with the same patterns instead.
+
+    The signals are what the UI labels 확인된 근거, so they name the source
+    fields present in this item, not the inferred activity tags.
     """
 
     haystack = f"{item.title} {item.overview} {item.method}"
-    tags = [tag for tag, _ in CATEGORY_TAG_ORDER if tag in haystack]
-    return category_for(tags), tags
+    tags = [tag for tag, pattern, _ in CATEGORY_TAG_ORDER if pattern.search(haystack)]
+    signals = [
+        name
+        for name, present in (
+            ("채점기준", bool(item.rubric_html.strip())),
+            ("성취기준", bool(item.standards)),
+            ("배점", bool(item.score.strip() or item.weight.strip())),
+            ("평가방법", bool(item.method.strip())),
+            ("평가 개요", bool(item.overview.strip())),
+        )
+        if present
+    ]
+    return category_for(tags), signals
 
 
 def source_format_for(saved_path: str) -> str:
     suffix = Path(saved_path).suffix.lstrip(".").lower()
     return suffix or "unknown"
+
+
+def refresh_cases_from_items(connection: sqlite3.Connection) -> int:
+    """Re-derive the case-level assessment fields from the item-level parse.
+
+    ``load_cases`` fills these fields from a legacy whole-document scan that
+    never applies the subject boundary, so a plan covering several courses
+    leaks a neighbouring subject's overview, standards, and task name into a
+    biology case.  ``assessment_items`` is parsed *inside* the boundary, so
+    wherever bounded items exist they are the better source.  Cases without
+    bounded items keep their catalogue values, and every field keeps its old
+    value when the items have nothing to put there.
+
+    ``criteria_json`` stays as ``load_cases`` left it: rubric criterion names
+    are not extracted at item level either, so there is nothing truer to copy.
+    """
+
+    grouped: dict[str, list[tuple[str, str, str, str, str, str]]] = {}
+    for row in connection.execute(
+        """
+        SELECT case_id, title, overview, method, score, weight, standards_json
+        FROM assessment_items
+        WHERE extraction_status = 'bounded' AND title_basis IN ('table', 'heading')
+        ORDER BY case_id, item_order
+        """
+    ):
+        grouped.setdefault(str(row[0]), []).append(tuple(str(value) for value in row[1:]))
+
+    def first(values: list[str]) -> str:
+        return next((value for value in values if value.strip()), "")
+
+    def unique(values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value for value in values if value.strip()))
+
+    updates = []
+    for case_id, items in grouped.items():
+        titles = unique([item[0] for item in items])
+        if not titles:
+            continue
+        standards = unique(
+            [code for item in items for code in json.loads(item[5] or "[]")]
+        )
+        updates.append(
+            (
+                titles[0],
+                json.dumps(titles, ensure_ascii=False),
+                first([item[1] for item in items]),
+                json.dumps(unique([item[2] for item in items]), ensure_ascii=False),
+                first([item[4] for item in items]) or first([item[3] for item in items]),
+                json.dumps(standards, ensure_ascii=False),
+                case_id,
+            )
+        )
+
+    connection.executemany(
+        """
+        UPDATE cases SET
+            primary_task_name = ?,
+            task_names_json = ?,
+            summary_overview = ?,
+            methods_json = ?,
+            weight_summary = ?,
+            standards_json = ?
+        WHERE case_id = ?
+        """,
+        updates,
+    )
+    return len(updates)
 
 
 def load_case_details(
@@ -972,8 +1059,6 @@ def load_case_details(
     parse failure or an unbounded result leaves the case's honest
     ``catalog_only`` value in place.
     """
-
-    from scripts.biology_assessment_detail_parser import parse_assessment_section
 
     case_rows = []
     for record in read_jsonl(catalog_path):
@@ -989,66 +1074,67 @@ def load_case_details(
                 source_format_for(str(source.get("saved_path") or "")),
             )
         )
-    wanted_shas = {sha for _, _, sha, _, _ in case_rows if sha}
-    texts = load_source_texts(evidence_source_path, wanted_shas)
+    # Stream the evidence source instead of loading every wanted document into
+    # a dict first: the source file is several GB and this machine has ~8GB of
+    # RAM, so holding all of it was the MemoryError that kept killing rebuilds.
+    cases_by_sha: dict[str, list[tuple[str, str, str, int, str]]] = {}
+    for row in case_rows:
+        if row[2]:
+            cases_by_sha.setdefault(row[2], []).append(row)
 
     item_rows = []
     ranking_rows = []
     status_rows = []
     title_basis_updates = []
-    parsed_cases = 0
-    confirmed_cases = 0
-    for case_id, subject, sha, review_score, source_format in case_rows:
-        text = texts.get(sha)
+    total_items = 0
+    for record in read_jsonl(evidence_source_path):
+        sha = str(record.get("sha256") or "")
+        pending = cases_by_sha.pop(sha, None)
+        if not pending:
+            continue
+        text = str(record.get("text") or "")
         if not text:
             continue
-        try:
-            section = parse_assessment_section(text, subject)
-        except Exception:
-            continue
-        if not section.items:
-            continue
-        parsed_cases += 1
-        status_rows.append(
-            (case_id, source_format, section.boundary_status, len(section.source_markdown))
-        )
-        first_confirmed = False
-        for order, item in enumerate(section.items, 1):
-            item_id = f"{case_id}-{order}"
-            item_rows.append(
-                (
-                    item_id,
-                    case_id,
-                    order,
-                    item.title,
-                    item.title_raw,
-                    item.title_basis,
-                    item.extraction_status,
-                    item.overview,
-                    item.method,
-                    item.timing,
-                    item.score,
-                    item.weight,
-                    json.dumps(list(item.standards), ensure_ascii=False),
-                    len(item.rubric_html),
-                    zlib.compress(item.source_html.encode("utf-8")),
-                    zlib.compress(item.rubric_html.encode("utf-8")),
-                )
+        for case_id, subject, _, review_score, source_format in pending:
+            _parse_one_case(
+                text,
+                case_id,
+                subject,
+                review_score,
+                source_format,
+                item_rows,
+                ranking_rows,
+                status_rows,
+                title_basis_updates,
             )
-            category, signals = item_category_and_signals(item)
-            ranking_rows.append(
-                (item_id, category, review_score, json.dumps(signals, ensure_ascii=False))
+        if len(item_rows) >= 2000:
+            total_items += _flush_detail_rows(
+                connection, item_rows, ranking_rows, status_rows, title_basis_updates
             )
-            if order == 1 and item.extraction_status == "bounded" and item.title_basis in (
-                "table",
-                "heading",
-            ):
-                first_confirmed = True
-        title_basis_updates.append(
-            ("source_detail" if first_confirmed else "source_detail_bundle_review", case_id)
-        )
-        confirmed_cases += 1 if first_confirmed else 0
+    total_items += _flush_detail_rows(
+        connection, item_rows, ranking_rows, status_rows, title_basis_updates
+    )
+    parsed_cases = connection.execute("SELECT COUNT(*) FROM case_detail_status").fetchone()[0]
+    confirmed_cases = connection.execute(
+        "SELECT COUNT(*) FROM cases WHERE title_basis = 'source_detail'"
+    ).fetchone()[0]
 
+    print(f"cases_refreshed_from_items={refresh_cases_from_items(connection)}")
+    print(
+        f"assessment_items={total_items} parsed_cases={parsed_cases} "
+        f"confirmed_cases={confirmed_cases}"
+    )
+    return parsed_cases, confirmed_cases, total_items
+
+
+def _flush_detail_rows(
+    connection: sqlite3.Connection,
+    item_rows: list,
+    ranking_rows: list,
+    status_rows: list,
+    title_basis_updates: list,
+) -> int:
+    written = len(item_rows)
     connection.executemany(
         f"INSERT INTO assessment_items VALUES ({','.join('?' * 16)})", item_rows
     )
@@ -1059,11 +1145,72 @@ def load_case_details(
     connection.executemany(
         "UPDATE cases SET title_basis = ? WHERE case_id = ?", title_basis_updates
     )
-    print(
-        f"assessment_items={len(item_rows)} parsed_cases={parsed_cases} "
-        f"confirmed_cases={confirmed_cases}"
+    item_rows.clear()
+    ranking_rows.clear()
+    status_rows.clear()
+    title_basis_updates.clear()
+    return written
+
+
+def _parse_one_case(
+    text: str,
+    case_id: str,
+    subject: str,
+    review_score: int,
+    source_format: str,
+    item_rows: list,
+    ranking_rows: list,
+    status_rows: list,
+    title_basis_updates: list,
+) -> None:
+    """Parse one case's document and append its rows to the pending batches."""
+
+    from scripts.biology_assessment_detail_parser import parse_assessment_section
+
+    try:
+        section = parse_assessment_section(text, subject)
+    except Exception:
+        return
+    if not section.items:
+        return
+    status_rows.append(
+        (case_id, source_format, section.boundary_status, len(section.source_markdown))
     )
-    return parsed_cases, confirmed_cases, len(item_rows)
+    first_confirmed = False
+    for order, item in enumerate(section.items, 1):
+        item_id = f"{case_id}-{order}"
+        item_rows.append(
+            (
+                item_id,
+                case_id,
+                order,
+                item.title,
+                item.title_raw,
+                item.title_basis,
+                item.extraction_status,
+                item.overview,
+                item.method,
+                item.timing,
+                item.score,
+                item.weight,
+                json.dumps(list(item.standards), ensure_ascii=False),
+                len(item.rubric_html),
+                zlib.compress(item.source_html.encode("utf-8")),
+                zlib.compress(item.rubric_html.encode("utf-8")),
+            )
+        )
+        category, signals = item_category_and_signals(item)
+        ranking_rows.append(
+            (item_id, category, review_score, json.dumps(signals, ensure_ascii=False))
+        )
+        if order == 1 and item.extraction_status == "bounded" and item.title_basis in (
+            "table",
+            "heading",
+        ):
+            first_confirmed = True
+    title_basis_updates.append(
+        ("source_detail" if first_confirmed else "source_detail_bundle_review", case_id)
+    )
 
 
 def build(
