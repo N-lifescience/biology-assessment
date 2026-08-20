@@ -1,9 +1,15 @@
+import json
+import sqlite3
+
+from scripts.build_biology_assessment_detail_db import SCHEMA_SQL
 from scripts.build_biology_assessment_publish_db import (
     assessment_category,
     assessment_structure,
+    category_for,
     derive_task_names,
     normalize_task_name,
     plain_text,
+    refresh_cases_from_items,
     task_name_is_rejected,
 )
 
@@ -354,3 +360,112 @@ def test_generic_colspan_label_is_not_used_as_an_overview() -> None:
 def test_category_does_not_leak_from_unrelated_document_context() -> None:
     structure = {"overview": "문제 풀이 과정을 작성한다.", "criteria": []}
     assert assessment_category("문제 풀이 과정 작성하기", structure, "앞부분 독서 안내") == ""
+
+
+def _case_connection() -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(SCHEMA_SQL)
+    connection.execute(
+        """
+        CREATE TABLE cases (
+            case_id TEXT PRIMARY KEY,
+            primary_task_name TEXT NOT NULL,
+            task_names_json TEXT NOT NULL,
+            summary_overview TEXT NOT NULL,
+            methods_json TEXT NOT NULL,
+            weight_summary TEXT NOT NULL,
+            standards_json TEXT NOT NULL
+        )
+        """
+    )
+    return connection
+
+
+def _insert_item(connection: sqlite3.Connection, **fields) -> None:
+    row = {
+        "item_id": "item-1",
+        "case_id": "case-1",
+        "item_order": 1,
+        "title": "",
+        "title_raw": "",
+        "title_basis": "table",
+        "extraction_status": "bounded",
+        "overview": "",
+        "method": "",
+        "timing": "",
+        "score": "",
+        "weight": "",
+        "standards_json": "[]",
+        "rubric_html_char_count": 0,
+        "source_html_zlib": None,
+        "rubric_html_zlib": None,
+    } | fields
+    connection.execute(
+        f"INSERT INTO assessment_items VALUES ({','.join('?' * len(row))})",
+        tuple(row.values()),
+    )
+
+
+def test_case_fields_are_rederived_from_the_bounded_items() -> None:
+    connection = _case_connection()
+    connection.execute(
+        "INSERT INTO cases VALUES (?,?,?,?,?,?,?)",
+        (
+            "case-1",
+            "사회 집단의 유형",
+            json.dumps(["사회 집단의 유형"]),
+            "사회 조직의 유형과 사례를 조사하고",
+            "[]",
+            "",
+            json.dumps(["[12사문01-01]"]),
+        ),
+    )
+    _insert_item(
+        connection,
+        title="효소 탐구 보고서",
+        overview="효소의 작용을 실험으로 확인한다",
+        method="보고서",
+        weight="20 %",
+        standards_json=json.dumps(["[12생과Ⅱ01-01]"]),
+    )
+    _insert_item(
+        connection,
+        item_id="item-2",
+        item_order=2,
+        title="광합성 색소 분리 실험",
+        title_basis="heading",
+        standards_json=json.dumps(["[12생과Ⅱ03-02]"]),
+    )
+
+    assert refresh_cases_from_items(connection) == 1
+
+    row = connection.execute("SELECT * FROM cases").fetchone()
+    assert row[1] == "효소 탐구 보고서"
+    assert json.loads(row[2]) == ["효소 탐구 보고서", "광합성 색소 분리 실험"]
+    assert row[3] == "효소의 작용을 실험으로 확인한다"
+    assert json.loads(row[4]) == ["보고서"]
+    assert row[5] == "20 %"
+    assert json.loads(row[6]) == ["[12생과Ⅱ01-01]", "[12생과Ⅱ03-02]"]
+
+
+def test_unbounded_items_leave_the_case_fields_alone() -> None:
+    connection = _case_connection()
+    connection.execute(
+        "INSERT INTO cases VALUES (?,?,?,?,?,?,?)",
+        ("case-1", "원래 이름", "[]", "원래 개요", "[]", "", "[]"),
+    )
+    _insert_item(
+        connection,
+        title="수행평가 원문 구간",
+        title_basis="unbounded_bundle",
+        extraction_status="bundle_review",
+    )
+
+    assert refresh_cases_from_items(connection) == 0
+    assert connection.execute("SELECT primary_task_name FROM cases").fetchone()[0] == "원래 이름"
+
+
+def test_category_is_empty_when_no_seed_tag_matches() -> None:
+    assert category_for(["토론"]) == ""
+    assert category_for(["탐구"]) == "inquiry"
+    assert category_for(["생태조사", "탐구"]) == "ecology"

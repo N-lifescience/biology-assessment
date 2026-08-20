@@ -1072,3 +1072,59 @@ def test_excessive_heading_candidates_fall_back_to_one_review_bundle() -> None:
     assert section.items[0].extraction_status == "bundle_review"
 
 
+
+
+def test_area_label_unit_name_loses_to_a_task_naming_heading() -> None:
+    """A 평가영역 cell often holds the unit, not the task, name."""
+
+    source = """
+    # 2026학년도 (생명과학Ⅱ) 교수학습 및 평가계획
+    ## 수행평가 세부 계획
+    1. 수행평가 ( 1 ) - 탐구 실험 보고서
+    <table>
+      <tr><th>평가영역</th><th>생명과학의 역사</th><th>반영비율</th><th>20 %</th></tr>
+      <tr><td>성취기준</td><td>[12생과Ⅱ01-01]</td><td>평가방법</td><td>탐구보고서</td></tr>
+      <tr><td>평가요소</td><td>조사</td><td>채점기준</td><td>배점</td></tr>
+    </table>
+    """
+
+    item = parse_assessment_section(source, "생명과학Ⅱ").items[0]
+
+    assert item.title == "탐구 실험 보고서"
+    assert item.title_basis == "heading"
+
+
+def test_explicit_task_label_still_outranks_the_heading() -> None:
+    source = """
+    # 2026학년도 (생명과학Ⅱ) 교수학습 및 평가계획
+    ## 수행평가 세부 계획
+    1. 평가 영역 2
+    <table>
+      <tr><th>수행과제</th><th>효소의 작용 탐구</th><th>반영비율</th><th>20 %</th></tr>
+      <tr><td>성취기준</td><td>[12생과Ⅱ01-01]</td><td>평가방법</td><td>실험</td></tr>
+      <tr><td>평가요소</td><td>실험 설계</td><td>채점기준</td><td>배점</td></tr>
+    </table>
+    """
+
+    item = parse_assessment_section(source, "생명과학Ⅱ").items[0]
+
+    assert item.title == "효소의 작용 탐구"
+    assert item.title_basis == "table"
+
+
+def test_written_exam_names_never_become_task_titles() -> None:
+    source = """
+    # 2026학년도 (생명과학Ⅱ) 교수학습 및 평가계획
+    ## 수행평가 세부 계획
+    <table>
+      <tr><th>평가종류</th><th>수행평가</th><th>수행평가</th></tr>
+      <tr><th>평가영역</th><td>기말고사</td><td>효소 탐구 보고서</td></tr>
+      <tr><td>성취기준</td><td>[12생과Ⅱ01-01]</td><td>[12생과Ⅱ01-02]</td></tr>
+      <tr><td>평가방법</td><td>지필</td><td>보고서</td></tr>
+      <tr><td>반영비율</td><td>20 %</td><td>30 %</td></tr>
+    </table>
+    """
+
+    titles = [item.title for item in parse_assessment_section(source, "생명과학Ⅱ").items]
+
+    assert "기말고사" not in titles

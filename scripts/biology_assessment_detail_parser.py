@@ -60,6 +60,16 @@ GENERIC_TITLE_RE = re.compile(
 EXPLICIT_TITLE_LABEL_RE = re.compile(
     r"^(?:평가영역(?:명|[1-9])?|수행평가(?:명|영역|과제명)|수행과제(?:명)?|평가과제명|과제명)$"
 )
+# The subset of those labels that names an assessment *area* rather than the
+# task: schools fill these cells with a unit name about as often as a task name.
+AREA_TITLE_LABEL_RE = re.compile(r"^(?:평가영역(?:[1-9])?|수행평가영역|영역만점|평가영역만점)$")
+# A heading may only outrank such a cell when it names an activity.  Section
+# headings that merely repeat a course name ("통합과학 생물") or a document
+# structure ("수행평가 영역별 세부기준") are worse titles than the cell.
+TASK_ACTIVITY_RE = re.compile(
+    r"보고서|실험|발표|프로젝트|포트폴리오|제작|조사|탐구|논술|서술|설계|작성|만들기|"
+    r"분석|토론|글쓰기|캠페인|관찰|측정|모형|에세이|일지"
+)
 TITLE_VALUE_STOP_LABELS = {
     "영역만점",
     "만점",
@@ -123,6 +133,7 @@ STRUCTURAL_EXACT_COMPACT = {
     "고사별배점",
     "수행평가의세부기준평가과제별로작성",
     "수행평가세부기준및배점",
+    "수행평가영역별세부기준",
     "수행평가세부계획",
     "수업참여도세부기준",
     "방침",
@@ -194,7 +205,10 @@ EXPECTED_STANDARD_PREFIXES = {
 }
 FIELD_LABELS = {
     "overview": ("평가개요", "평가내용", "수행과제", "과제내용"),
-    "method": ("평가방법", "방법"),
+    # 평가유형/평가주체/평가방식 are the sub-rows a merged "평가 방법" cell spans;
+    # treating them as method labels keeps the label itself out of the value
+    # and reads the value cell that actually names the method.
+    "method": ("평가방법", "방법", "평가유형", "평가주체", "평가방식"),
     "timing": ("평가시기", "실시시기", "평가일시횟수", "시기"),
     "weight": ("점수반영비율", "반영비율", "평가비율"),
     # A bare "점수/배점" is normally a rubric column, not the task total.
@@ -531,6 +545,12 @@ def _clean_heading_title(raw: str) -> tuple[str, str]:
     title_raw = visible_text(raw)
     match = ITEM_PREFIX_RE.match(title_raw)
     title = match.group("title").strip() if match else title_raw
+    # Headings are often wrapped in brackets, or prefixed with the course name
+    # in brackets ("[과학탐구실험1]수행평가 영역별 세부기준").  Neither is part
+    # of the task name.
+    title = re.sub(r"^\[\s*([^\[\]]{2,60})\s*\]$", r"\1", title.strip())
+    title = re.sub(r"^\(\s*([^()]{2,60})\s*\)$", r"\1", title.strip())
+    title = re.sub(r"^\[[^\[\]]{1,20}\]\s*(?=\S)", "", title)
     title = re.sub(r"^수행평가\s*\(\s*\d+\s*\)\s*[-:–—]?\s*", "", title)
     title = re.sub(
         r"\s*\([^)]*(?:\d+(?:\.\d+)?\s*(?:점|%)|만점|반영\s*비율)[^)]*\)\s*$",
@@ -731,12 +751,23 @@ def segment_subject_alignment(segment: str, subject: str) -> str:
 
 
 def explicit_segment_title(segment: str) -> str:
+    """Return only the title from :func:`explicit_segment_title_with_label`."""
+
+    return explicit_segment_title_with_label(segment)[0]
+
+
+def explicit_segment_title_with_label(segment: str) -> tuple[str, str]:
     """Read an assessment name only from an explicit source-table label.
 
     The first non-empty cell after labels such as ``평가 영역명`` or
     ``수행평가명`` is source-authored evidence. Metadata cells (score, timing,
     method, and so on) terminate the search so merged tables cannot leak a
     neighbouring field into the title.
+
+    Returns the title and the compacted label that produced it, because the
+    label decides how much the title can be trusted: ``평가영역`` cells hold a
+    unit name as often as a task name, while ``수행과제``/``과제명`` cells name
+    the task itself.
     """
 
     def clean_candidate(candidate: str) -> str:
@@ -798,7 +829,7 @@ def explicit_segment_title(segment: str) -> str:
                     ):
                         break
                     if usable(candidate):
-                        return source_spelling(candidate)
+                        return source_spelling(candidate), label
                     break
 
                 # A label/value row can contain a generic assessment area
@@ -823,7 +854,7 @@ def explicit_segment_title(segment: str) -> str:
                         seen.add(key)
                         vertical.append(candidate)
                 if len(vertical) == 1:
-                    return source_spelling(vertical[0])
+                    return source_spelling(vertical[0]), label
 
         # A common rubric layout names the assessment in the first data cell
         # under an explicit '영역(만점)' header.  This differs from an ordinary
@@ -846,10 +877,10 @@ def explicit_segment_title(segment: str) -> str:
                     continue
                 candidate = clean_candidate(visible_text(following_row[0]))
                 if usable(candidate):
-                    return source_spelling(candidate)
+                    return source_spelling(candidate), labels[0]
                 if candidate:
                     break
-    return ""
+    return "", ""
 
 
 def _heading_candidates(block: str) -> list[tuple[int, int, str, str]]:
@@ -1559,6 +1590,12 @@ def _valid_plan_title(value: str) -> bool:
             value.strip(),
         )
         or re.fullmatch(r"(?:프로젝트|포트폴리오|서술형|논술형|교사\s*관찰)\s*평가", value)
+        # Written-exam names reach every table path, not only the explicit-label
+        # one, so the gate belongs in this shared validator.  The published
+        # title is the cleaned form ("1차고사(30%)" is displayed as "1차고사"),
+        # so both spellings have to be checked.
+        or NON_TASK_TITLE_RE.fullmatch(value.strip())
+        or NON_TASK_TITLE_RE.fullmatch(_clean_heading_title(value)[0])
     )
 
 
@@ -1816,7 +1853,19 @@ def parse_assessment_section(
             # not only headings already classified as structural.  School
             # plans often number a generic subsection and put the real task
             # name in the first table row.
-            table_title = explicit_segment_title(segment)
+            table_title, table_label = explicit_segment_title_with_label(segment)
+            # …except under a 평가영역 label, whose cell carries the unit being
+            # assessed as often as the task ("생명과학의 역사" under a section
+            # headed "1. 수행평가 ( 1 ) - 탐구 실험 보고서").  A source heading
+            # that names a task outranks that cell.
+            if (
+                table_title
+                and AREA_TITLE_LABEL_RE.fullmatch(table_label)
+                and not structural_heading
+                and TASK_ACTIVITY_RE.search(title)
+                and _valid_plan_title(title)
+            ):
+                table_title = ""
             table_display_title = (
                 _clean_heading_title(table_title)[0] if table_title else ""
             )
