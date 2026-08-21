@@ -58,7 +58,8 @@ GENERIC_TITLE_RE = re.compile(
     r"결시자.*|미응시자.*|학적\s*변동.*|성적\s*처리.*|평가\s*결과.*)$"
 )
 EXPLICIT_TITLE_LABEL_RE = re.compile(
-    r"^(?:평가영역(?:명|[1-9])?|수행평가(?:명|영역|과제명)|수행과제(?:명)?|평가과제명|과제명)$"
+    r"^(?:평가영역(?:명|[1-9])?|수행평가(?:명|영역|과제명|과제)|수행과제(?:명)?|"
+    r"평가과제(?:명)?|과제명)$"
 )
 # The subset of those labels that names an assessment *area* rather than the
 # task: schools fill these cells with a unit name about as often as a task name.
@@ -1010,6 +1011,40 @@ PLAN_TITLE_COLUMN_LABELS = {
 }
 
 
+def _row_answers_label_horizontally(row: list[str], index: int) -> bool:
+    """True when the label at ``index`` is answered to its right, in its own row.
+
+    School plans use the same words in two opposite layouts, and only the
+    surrounding row says which one this is:
+
+    * label/value row -- ``평가과제 | 우리학교 생태지도 만들기`` names one
+      assessment to the right of the label.  The cells *below* it are the next
+      plan fields (성취기준, 평가내용, 평가요소, then the rubric dimensions),
+      so reading that column downwards invents an assessment per rubric row.
+    * column header -- ``평가영역 | 반영비율 | 평가방법 | 시기`` is a row of
+      sibling field labels, and the assessments really are listed underneath.
+
+    The distinguishing evidence is the next populated cell in the same row:
+    a sibling field label means column header, anything else means the row
+    already answered itself.  The answer is deliberately not required to look
+    like a task name -- ``평가내용``'s answer is a full sentence, and demanding
+    a title-shaped value there would send the scan back down the column and
+    invent one assessment per rubric row.
+    """
+
+    for cell in row[index + 1 :]:
+        compact = compact_text(visible_text(cell))
+        if not compact:
+            continue
+        return not (
+            compact in ALL_FIELD_LABELS
+            or compact in PLAN_TITLE_COLUMN_LABELS
+            or bool(TITLE_VALUE_STOP_LABEL_RE.fullmatch(compact))
+            or bool(EXPLICIT_TITLE_LABEL_RE.fullmatch(compact))
+        )
+    return False
+
+
 @lru_cache(maxsize=16)
 def _table_fragments_with_spans(value: str) -> list[tuple[int, int, str]]:
     fragments = [
@@ -1470,6 +1505,8 @@ def _summary_table_items(
                 if label not in PLAN_TITLE_COLUMN_LABELS:
                     continue
                 if label in {"평가영역", "수행평가영역"} and not summary_markers:
+                    continue
+                if _row_answers_label_horizontally(header, index):
                     continue
                 title_columns.append(index)
             if not title_columns:
