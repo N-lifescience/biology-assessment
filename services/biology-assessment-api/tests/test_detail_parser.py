@@ -19,8 +19,10 @@ from scripts.biology_assessment_detail_parser import (
     balance_table_tags,
     heading_title_is_structural,
     markdown_fragment_to_html,
+    normalize_checkbox_glyphs,
     parse_assessment_section,
     segment_subject_alignment,
+    visible_text,
 )
 
 
@@ -1128,3 +1130,55 @@ def test_written_exam_names_never_become_task_titles() -> None:
     titles = [item.title for item in parse_assessment_section(source, "생명과학Ⅱ").items]
 
     assert "기말고사" not in titles
+
+
+def test_hangul_checkbox_glyph_artifact_restores_check_state() -> None:
+    """HWP/PDF extraction flattens a checkbox symbol font's strokes into the
+    literal letters 'gfedcb' (checked) and 'gfedc' (unchecked); the visible
+    text must read as an actual checkbox, not raw component-glyph letters."""
+
+    assert normalize_checkbox_glyphs("gfedcb 논술") == "☑ 논술"
+    assert normalize_checkbox_glyphs("gfedc 구술‧발표") == "□ 구술‧발표"
+    assert (
+        visible_text("<td>gfedcb 논술</td><td>gfedc 구술‧발표</td>")
+        == "☑ 논술 □ 구술‧발표"
+    )
+
+
+def test_page_break_split_table_is_rendered_as_one_table() -> None:
+    """A source page break can close a <table> mid-rowspan and reopen a new
+    <table> for the remaining rows. Nothing legitimate separates two tables
+    by blank lines alone, so the renderer fuses them back into one table."""
+
+    fragment = """<table>
+<tr><th>평가 영역명</th><th>혈액형 판정[논술형]</th></tr>
+<tr><td rowspan="5">[12생과02-05] 병원체</td><td>A</td></tr>
+</table>
+
+<table>
+<tr><th>체 반응의 특이성을 이해</th><th>반응의 특이성에 대해</th></tr>
+<tr><td>B</td><td>혈액 응집 반응의 원리</td></tr>
+</table>
+"""
+
+    rendered = markdown_fragment_to_html(fragment)
+
+    assert rendered.count("<table") == rendered.count("</table>") == 1
+    assert "체 반응의 특이성을 이해" in rendered
+
+
+def test_tables_separated_by_other_content_stay_separate() -> None:
+    fragment = """<table>
+<tr><td>첫 번째 표</td></tr>
+</table>
+
+<p>설명 문단</p>
+
+<table>
+<tr><td>독립된 두 번째 표</td></tr>
+</table>
+"""
+
+    rendered = markdown_fragment_to_html(fragment)
+
+    assert rendered.count("<table") == rendered.count("</table>") == 2

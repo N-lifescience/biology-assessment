@@ -31,9 +31,12 @@ from app.visitor_counter import visitor_counts
 
 SERVICE_NAME: Final = "biology-assessment-api"
 SERVICE_VERSION: Final = "0.3.0"
-# 시드 목록이다. 실제 생명과학 평가계획을 분석한 뒤 유형이 늘어날 수 있다
-# (프로젝트·보고서·토론·제작·실험 등). 웹의 CATEGORIES·PatternId와 값을 맞춘다.
-CURATED_CATEGORY_PATTERN: Final = "^(inquiry|ecology|problem|presentation|portfolio|reading)$"
+# 케이스 단위 action_tags(build_biology_assessment_evidence_index.ACTION_TAGS)와
+# 같은 9종. 생태조사는 표본이 너무 적어(전체 16건) 제외했다(2026-08-21).
+# 웹의 CATEGORIES·PatternId와 값을 맞춘다.
+CURATED_CATEGORY_PATTERN: Final = (
+    "^(inquiry|project|problem|presentation|debate|portfolio|reading|production|experiment)$"
+)
 INTERPRETATION_CAUTION: Final = (
     "평가계획에서 과목이 발견되지 않았다는 사실은 학교가 과목을 개설하지 않았다는 뜻이 아닙니다."
 )

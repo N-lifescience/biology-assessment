@@ -29,6 +29,7 @@ import json
 import re
 import shutil
 import sqlite3
+import time
 import zlib
 from html.parser import HTMLParser
 from pathlib import Path
@@ -143,14 +144,20 @@ UNCONFIRMED_TASK_NAME = "구체적 과제명 미탐지"
 # to the upstream keys in ``build_biology_assessment_evidence_index.ACTION_TAGS``
 # because ``cases.action_tags_json`` carries those exact strings; the patterns
 # repeat the upstream spellings so item-level text scanning tolerates the
-# spacing the source documents actually use ("생태 조사", "문제 해결").
+# spacing the source documents actually use ("생태 조사", "문제 해결"). Kept in
+# the same relative order as upstream ``ACTION_TAGS`` (case-level classifier)
+# minus 생태조사: too few bounded items (16 corpus-wide) to carry its own
+# reference tab, decided with the project owner 2026-08-21.
 CATEGORY_TAG_ORDER = [
-    ("생태조사", re.compile(r"생태\s*조사|야외\s*(?:조사|관찰)"), "ecology"),
     ("탐구", re.compile(r"탐구"), "inquiry"),
+    ("프로젝트", re.compile(r"프로젝트"), "project"),
     ("문제해결", re.compile(r"문제\s*해결"), "problem"),
     ("발표", re.compile(r"발표"), "presentation"),
+    ("토론", re.compile(r"토론"), "debate"),
     ("포트폴리오", re.compile(r"포트폴리오"), "portfolio"),
     ("보고서", re.compile(r"보고서"), "reading"),
+    ("제작", re.compile(r"제작"), "production"),
+    ("실험", re.compile(r"실험"), "experiment"),
 ]
 # ponytail: a school count below this is treated as too small to publish
 # per-school detail confidently. No official threshold was handed off.
@@ -798,11 +805,46 @@ def region_from_saved_path(saved_path: str) -> str:
     return ""
 
 
-def read_jsonl(path: Path):
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                yield json.loads(line)
+def read_jsonl(path: Path, max_resumes: int = 50):
+    """Stream a JSONL file, resuming after a transient removable-drive drop.
+
+    The evidence source lives on an external USB drive; a brief power-state
+    hiccup mid-read raises ``OSError: [Errno 22] Invalid argument`` while
+    reading, or ``PermissionError: [Errno 13]`` while Windows is still
+    re-mounting the drive right after a reconnect -- either would otherwise
+    lose a multi-hour rebuild. Only those two errnos are treated as
+    resumable; the drive being genuinely gone or actually unauthorized
+    raises a different errno (e.g. ENOENT) and is left to propagate. A
+    permanently wrong permission would also hit ``max_resumes`` and raise
+    rather than retry forever.
+    """
+
+    RESUMABLE_ERRNOS = {13, 22}
+    offset = 0
+    resumes = 0
+    while True:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                handle.seek(offset)
+                while True:
+                    # readline(), not "for line in handle" -- the iterator
+                    # protocol's internal readahead buffering disables tell()
+                    # ("telling position disabled by next() call"), which
+                    # would break resuming after the very error this exists
+                    # to survive.
+                    line = handle.readline()
+                    if not line:
+                        break
+                    offset = handle.tell()
+                    if line.strip():
+                        yield json.loads(line)
+            return
+        except OSError as error:
+            if error.errno not in RESUMABLE_ERRNOS or resumes >= max_resumes:
+                raise
+            resumes += 1
+            print(f"read_jsonl: resuming after transient I/O error (attempt {resumes})")
+            time.sleep(2)
 
 
 def load_school_districts(school_district_path: Path | None) -> dict[str, str]:
