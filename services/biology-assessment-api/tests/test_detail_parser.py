@@ -1182,3 +1182,52 @@ def test_tables_separated_by_other_content_stay_separate() -> None:
     rendered = markdown_fragment_to_html(fragment)
 
     assert rendered.count("<table") == rendered.count("</table>") == 2
+
+
+def test_label_value_row_names_one_assessment_not_one_per_rubric_row() -> None:
+    """``평가과제 | <이름>`` answers itself horizontally.
+
+    Reading that column downwards instead turns every 평가요소 rubric
+    dimension -- and every rubric criterion sentence under it -- into its own
+    "assessment", which is what a 금성고 plan produced (9 items for 1 task).
+    """
+
+    source = """
+    # 2026학년도 (생명과학) 교수학습 및 평가계획
+    ## 수행평가 세부 계획
+    <table>
+      <tr><th>평가과제</th><th colspan="7">우리학교 생태지도 만들기</th></tr>
+      <tr><td>성취기준</td><td colspan="7">[12생과01-01] ~ [12생과01-07]와 관련하여 생태 지도를 제작한다.</td></tr>
+      <tr><td>평가내용</td><td colspan="7">우리 학교 내 다양한 생물과 서식 환경을 관찰하고 조사하여 생태 지도를 제작함으로써 학교 생태계에 대한 이해를 높일 수 있다.</td></tr>
+      <tr><td>평가시기</td><td>4월 2주</td><td>반영비율(%)</td><td>15%</td><td>만점</td><td colspan="3">100</td></tr>
+      <tr><td>평가요소</td><td colspan="5">평가기준</td><td>척도</td><td>배점</td></tr>
+      <tr><td rowspan="2">생태 환경 조사 및 기록</td><td colspan="5">학교 내 생물 6종 이상을 관찰하고 기록하였다.</td><td>30</td><td rowspan="2">30</td></tr>
+      <tr><td colspan="5">학교 내 생물 3종 이하를 관찰하여 기록하였다.</td><td>10</td></tr>
+      <tr><td rowspan="2">생태지도 내용의 정확성</td><td colspan="5">3가지 요소가 모두 지도에 표시되어 있다.</td><td>40</td><td rowspan="2">40</td></tr>
+      <tr><td colspan="5">위 요소 중 1가지만 표시되어 있다.</td><td>20</td></tr>
+    </table>
+    """
+
+    titles = [item.title for item in parse_assessment_section(source, "생명과학").items]
+
+    assert titles == ["우리학교 생태지도 만들기"]
+
+
+def test_column_header_summary_table_still_lists_each_row() -> None:
+    """The opposite layout must keep working: sibling field labels in the
+    header row mean the assessments really are the rows underneath."""
+
+    source = """
+    # 2026학년도 (생명과학) 교수학습 및 평가계획
+    ## 수행평가 세부 계획
+    <table>
+      <tr><th>평가영역</th><th>성취기준</th><th>평가방법</th><th>반영비율</th></tr>
+      <tr><td>효소 탐구 보고서</td><td>[12생과01-01]</td><td>보고서</td><td>20%</td></tr>
+      <tr><td>광합성 색소 분리 실험</td><td>[12생과01-02]</td><td>실험</td><td>20%</td></tr>
+    </table>
+    """
+
+    titles = [item.title for item in parse_assessment_section(source, "생명과학").items]
+
+    assert "효소 탐구 보고서" in titles
+    assert "광합성 색소 분리 실험" in titles
