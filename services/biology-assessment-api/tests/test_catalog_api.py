@@ -1,6 +1,9 @@
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.settings import detail_catalog_database_path
 
 client = TestClient(app)
 
@@ -61,6 +64,22 @@ def test_cases_filter_by_course_without_exposing_local_paths_or_full_text() -> N
         assert "C:\\Users\\" not in serialized
 
 
+def _published_category() -> str:
+    """Return a category id that exists in the published rankings table."""
+
+    connection = sqlite3.connect(detail_catalog_database_path())
+    try:
+        row = connection.execute(
+            "SELECT category FROM assessment_item_rankings"
+            " WHERE category <> '' AND priority_score >= 38"
+            " GROUP BY category ORDER BY COUNT(*) DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row, "published database has no ranked categories"
+    return str(row[0])
+
+
 def test_cases_support_the_whole_library_without_course_filters() -> None:
     response = client.get("/api/v1/cases", params={"limit": 5})
 
@@ -75,9 +94,13 @@ def test_cases_support_the_whole_library_without_course_filters() -> None:
 
 
 def test_curated_cases_use_transparent_evidence_priority() -> None:
+    # Read a category the published database actually holds instead of naming
+    # one: the 영역명 taxonomy is expected to be revised, and this test is
+    # about the endpoint's evidence contract, not about any one category id.
+    category = _published_category()
     response = client.get(
         "/api/v1/curated",
-        params={"category": "reading", "curriculum": "2022", "limit": 5},
+        params={"category": category, "limit": 5},
     )
 
     assert response.status_code == 200
@@ -85,7 +108,7 @@ def test_curated_cases_use_transparent_evidence_priority() -> None:
     assert payload["items"]
     assert "서열" in payload["interpretation"]
     for item in payload["items"]:
-        assert item["category"] == "reading"
+        assert item["category"] == category
         assert item["title_basis"] in {"table", "heading"}
         assert item["priority_signals"]
         assert "\n" not in item["title"]

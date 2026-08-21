@@ -126,10 +126,15 @@ CREATE INDEX idx_assessment_items_case_id ON assessment_items(case_id);
 
 CREATE TABLE assessment_item_rankings (
     item_id TEXT PRIMARY KEY,
+    -- ``category`` is the 방법 axis of the 동국대 가이드북 matrix and ``topic``
+    -- the 주제(내용) axis; a 영역명 is designed as the pair of the two.
     category TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    category_ambiguous INTEGER NOT NULL,
     priority_score INTEGER NOT NULL,
     priority_signals_json TEXT NOT NULL
 );
+CREATE INDEX idx_assessment_item_rankings_topic ON assessment_item_rankings(topic);
 
 CREATE TABLE case_detail_status (
     case_id TEXT PRIMARY KEY,
@@ -155,10 +160,49 @@ CATEGORY_TAG_ORDER = [
     ("발표", re.compile(r"발표"), "presentation"),
     ("토론", re.compile(r"토론"), "debate"),
     ("포트폴리오", re.compile(r"포트폴리오"), "portfolio"),
-    ("보고서", re.compile(r"보고서"), "reading"),
+    # 보고서 is its own type. It used to map to "reading"(독서 연계), which put
+    # every 실험 보고서 under a 독서 tab it has nothing to do with.
+    ("보고서", re.compile(r"보고서"), "report"),
     ("제작", re.compile(r"제작"), "production"),
     ("실험", re.compile(r"실험"), "experiment"),
 ]
+# 독서 연계 now needs the source to actually mention reading.
+READING_EVIDENCE_RE = re.compile(r"독서|도서|책\s|책을|책의|독후")
+# What the school itself ticked in the 평가 방법 checkbox row. This is the
+# source's own declaration of the assessment type, so it outranks guessing the
+# type from words in the title -- almost every 생명과학 task name contains
+# "탐구", which made 주제탐구 a catch-all bucket.
+DECLARED_METHOD_CATEGORIES = [
+    (re.compile(r"실험\s*[·․‧ㆍ]?\s*실습|실험"), "experiment"),
+    (re.compile(r"프로젝트"), "project"),
+    (re.compile(r"포트폴리오"), "portfolio"),
+    (re.compile(r"토의\s*[·․‧ㆍ]?\s*토론|토론"), "debate"),
+    (re.compile(r"구술\s*[·․‧ㆍ]?\s*발표|발표"), "presentation"),
+    (re.compile(r"보고서"), "report"),
+]
+SELECTED_BOX_RE = re.compile(r"[■☑☒✓✔]|□\s*[VvＶ]")
+
+
+def selected_methods(method: str) -> list[str]:
+    """Return only the 평가 방법 options the school actually ticked.
+
+    A source cell usually carries the whole menu ("□ 서술·논술 ☑ 실험·실습 □
+    기타"), so reading the raw string would credit every school with every
+    method. When the cell has no checkbox at all it is a plain declaration
+    ("보고서평가") and stands on its own.
+    """
+
+    text = re.sub(r"\s+", " ", method).strip()
+    if not text:
+        return []
+    if not SELECTED_BOX_RE.search(text):
+        return [text]
+    picked: list[str] = []
+    for segment in re.split(r"(?=[■☑☒✓✔□])", text):
+        segment = segment.strip()
+        if SELECTED_BOX_RE.match(segment):
+            picked.append(SELECTED_BOX_RE.sub("", segment).strip(" ·|"))
+    return [value for value in picked if value]
 # ponytail: a school count below this is treated as too small to publish
 # per-school detail confidently. No official threshold was handed off.
 SMALL_SAMPLE_SCHOOL_THRESHOLD = 3
@@ -990,19 +1034,25 @@ def load_subject_stats(
     print(f"subject_stats={len(stats_rows)} subject_action_tags={len(tag_rows)}")
 
 
-def item_category_and_signals(item) -> tuple[str, list[str]]:
-    """Return the item's category and the evidence fields it actually has.
+def item_category_and_signals(item) -> tuple[str, str, bool, list[str]]:
+    """Classify one item on the 주제 × 방법 matrix and list its evidence fields.
 
-    Cases classify by their pre-extracted ``action_tags``; individual items
-    have no such pre-extracted tags, so this scans the item's own title/
-    overview/method text with the same patterns instead.
+    The axes come from 동국대 「수행평가 영역명 활용 가이드북」 (see
+    ``biology_assessment_area_taxonomy``): a 영역명 is designed as a topic
+    paired with a method, so a single flat "type" cannot express it. The
+    returned ``ambiguous`` flag marks items the guidebook's own word lists do
+    not settle, so they can be reviewed instead of silently bucketed.
 
     The signals are what the UI labels 확인된 근거, so they name the source
     fields present in this item, not the inferred activity tags.
     """
 
-    haystack = f"{item.title} {item.overview} {item.method}"
-    tags = [tag for tag, pattern, _ in CATEGORY_TAG_ORDER if pattern.search(haystack)]
+    from scripts.biology_assessment_area_taxonomy import classify_area_name
+
+    area = classify_area_name(item.title, item.overview, item.method)
+    category = str(area["method"])
+    topic = str(area["topic"])
+    ambiguous = bool(area["ambiguous"])
     signals = [
         name
         for name, present in (
@@ -1014,7 +1064,7 @@ def item_category_and_signals(item) -> tuple[str, list[str]]:
         )
         if present
     ]
-    return category_for(tags), signals
+    return category, topic, ambiguous, signals
 
 
 def source_format_for(saved_path: str) -> str:
@@ -1181,7 +1231,7 @@ def _flush_detail_rows(
         f"INSERT INTO assessment_items VALUES ({','.join('?' * 16)})", item_rows
     )
     connection.executemany(
-        "INSERT INTO assessment_item_rankings VALUES (?,?,?,?)", ranking_rows
+        "INSERT INTO assessment_item_rankings VALUES (?,?,?,?,?,?)", ranking_rows
     )
     connection.executemany("INSERT INTO case_detail_status VALUES (?,?,?,?)", status_rows)
     connection.executemany(
@@ -1241,11 +1291,23 @@ def _parse_one_case(
                 zlib.compress(item.rubric_html.encode("utf-8")),
             )
         )
-        category, signals = item_category_and_signals(item)
+        category, topic, ambiguous, signals = item_category_and_signals(item)
         ranking_rows.append(
-            (item_id, category, review_score, json.dumps(signals, ensure_ascii=False))
+            (
+                item_id,
+                category,
+                topic,
+                int(ambiguous),
+                review_score,
+                json.dumps(signals, ensure_ascii=False),
+            )
         )
-        if order == 1 and item.extraction_status == "bounded" and item.title_basis in (
+        # Any bounded item confirms the case, not only the first one. The case's
+        # own displayed fields come from ``refresh_cases_from_items``, which
+        # reads the first *bounded* item regardless of position; requiring
+        # order 1 here left 798 cases whose confirmed item was published in
+        # 유형별 참고 while /api/v1/cases/{id} answered 404 for the same case.
+        if item.extraction_status == "bounded" and item.title_basis in (
             "table",
             "heading",
         ):

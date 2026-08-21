@@ -98,6 +98,8 @@ NON_TASK_TITLE_RE = re.compile(
     r"[12]\s*(?:차|회)|정기\s*(?:고사|시험)(?:\s*\(\s*\d+%\s*\))?|"
     r"선택형|서[·‧ㆍ]?논술형)$"
 )
+ACHIEVEMENT_CODE_TITLE_RE = re.compile(r"^\[?\s*(?:10|12)[가-힣A-Za-zⅠ-Ⅹ]{1,6}\s*\d")
+SCORE_ONLY_TITLE_RE = re.compile(r"^[\d\s.,()%점배분/~-]+$")
 RUBRIC_SENTENCE_ENDING_RE = re.compile(r"(?:다|음|함|됨|경우)$")
 RUBRIC_SENTENCE_VOCABULARY_RE = re.compile(
     r"부족|미흡|충족|만족|참여|제출|응시|모호|불명확|불충분|없음|않음|못함|요함|"
@@ -147,7 +149,11 @@ STRUCTURAL_HEADING_RE = re.compile(
     r"(?:(?:통합|생명)?과학\s*)?학습\s*과정\s*평가|서(?:술)?[·‧ㆍ]?\s*논술형\s*평가(?:\s*계획)?|세부\s*평가\s*척도|"
     r"평가\s*방법\s*및\s*결과의\s*활용|정기시험\s*및\s*수행평가\s*세부계획|"
     r"기타\s*사항|(?:평가과제|수행과제|평가영역|수행)\s*[12]|"
-    r"평가의?\s*종류와\s*반영\s*비율|시행\s*계획|영역별\s*세부\s*계획|"
+    r"평가의?\s*종류\s*(?:와|및)\s*반영\s*비율|시행\s*계획|영역별\s*세부\s*계획|"
+    r"기준\s*성취율\s*(?:와|및)\s*성취도[^\n]*|"
+    # 이 절은 "평가하지 않는" 성취기준을 다룬다 -- 수행평가명이 아니다.
+    r"[^\n]*평가하지\s*않는\s*성취기준[^\n]*|"
+    r"(?:세부\s*)?평가\s*계획|평가\s*세부\s*계획|"
     r"수행평가\s*성취기준)$"
 )
 STRUCTURAL_EXACT_COMPACT = {
@@ -520,6 +526,97 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
     return full_text[start:end].strip(), start, end, status
 
 
+PROSE_SENTENCE_END_RE = re.compile(r"(?:다|음|함|됨|것|바람)\s*[.。]?\s*$")
+
+
+def _is_source_heading(line: str) -> bool:
+    """Return true only for a line the source itself presents as a heading.
+
+    Korean plans number both section headings and 평가 방침 prose with 가/나/다,
+    so the numbering alone proves nothing.  Two things separate them: a prose
+    item is written as a Markdown list bullet (``- 나. …``), and it ends like a
+    sentence (``…배점 등을 사전에 알리고 충분히 설명하여 준비하게 한다.``).
+    Treating those as headings anchored whole assessment blocks to a policy
+    paragraph, which then published the plan's summary table as if it were one
+    performance assessment.
+    """
+
+    if re.match(r"^\s*[-*•▪]\s", line):
+        return False
+    shown = visible_text(line)
+    if re.match(r"^\s*#{1,6}\s+", line):
+        return True
+    if not re.match(r"^\s*(?:\d{1,2}|[가-하])\s*[.)]\s*", shown):
+        return False
+    return not PROSE_SENTENCE_END_RE.search(shown)
+
+
+# One assessment's detail table names its own achievement standard and rubric.
+# A whole-plan summary table instead lines the exams up against the
+# performance assessments, so it names 정기시험/지필평가 and a 합계 column.
+DETAIL_TABLE_REQUIRED = ("성취기준",)
+DETAIL_TABLE_RUBRIC = ("평가기준", "채점기준", "성취수준")
+DETAIL_TABLE_WEIGHT = ("만점", "반영비율", "배점")
+PLAN_SUMMARY_MARKERS = ("정기시험", "지필평가", "합계", "고사명", "평가종류", "평가유형")
+
+
+def _table_after_heading(lines: list[tuple[int, int, str]], index: int) -> str:
+    """Return the table that a heading introduces, or "" when none follows."""
+
+    cursor = index + 1
+    seen = 0
+    while cursor < len(lines) and seen < 3:
+        raw = lines[cursor][2]
+        if not raw.strip():
+            cursor += 1
+            continue
+        if re.search(r"<table\b", raw, flags=re.I):
+            chunk: list[str] = []
+            depth = 0
+            while cursor < len(lines):
+                current = lines[cursor][2]
+                chunk.append(current)
+                depth += len(re.findall(r"<table\b", current, flags=re.I))
+                depth -= len(re.findall(r"</table>", current, flags=re.I))
+                cursor += 1
+                if depth <= 0:
+                    break
+            return "\n".join(chunk)
+        seen += 1
+        cursor += 1
+    return ""
+
+
+def _introduces_assessment_detail_table(
+    lines: list[tuple[int, int, str]], index: int
+) -> bool:
+    """True when this heading is followed by one assessment's own detail table.
+
+    Some plans drop the ``4. 수행평가 세부 계획`` line during PDF extraction, so
+    the only remaining evidence that the detail section started is the table
+    itself.  Reading the table lets the block start at the right place instead
+    of falling back to a 평가 방침 paragraph further up.
+    """
+
+    raw = lines[index][2]
+    if not _is_source_heading(raw):
+        return False
+    title = _clean_heading_title(visible_text(raw))[0]
+    if not title or heading_title_is_structural(title):
+        return False
+    table = _table_after_heading(lines, index)
+    if not table:
+        return False
+    compact = compact_text(visible_text(table))
+    if any(marker in compact for marker in PLAN_SUMMARY_MARKERS):
+        return False
+    return (
+        all(marker in compact for marker in DETAIL_TABLE_REQUIRED)
+        and any(marker in compact for marker in DETAIL_TABLE_RUBRIC)
+        and any(marker in compact for marker in DETAIL_TABLE_WEIGHT)
+    )
+
+
 def _anchor_score(line: str) -> int:
     shown = visible_text(line)
     compact = compact_text(shown)
@@ -552,16 +649,21 @@ def _anchor_score(line: str) -> int:
     # Many plans use a short source heading such as ``라. 수행평가 영역 및
     # 배점``.  It is a reliable block anchor only when it is visibly a heading,
     # not when the same words occur in prose or a schedule table.
-    heading_like = bool(
-        re.match(r"^\s*#{1,6}\s+", line)
-        or re.match(r"^\s*(?:\d{1,2}|[가-하])\s*[.)]\s*", visible_text(line))
-    )
-    if (
-        heading_like
-        and len(compact) <= 60
-        and any(term in compact for term in ("세부", "계획", "기준", "영역", "과제", "배점"))
+    if len(compact) <= 60 and any(
+        term in compact for term in ("세부", "계획", "기준", "영역", "과제", "배점")
     ):
-        return 90
+        # A section heading is short.  PDF line wrapping cuts a 평가 방침
+        # sentence mid-word ("…실시 가능한 수행평"), so it can slip past the
+        # sentence-ending test -- length is the signal that survives wrapping.
+        if _is_source_heading(line) and len(compact) <= 30:
+            return 90
+        # Demoted, not discarded, and only for a line the source numbered:
+        # a 평가 방침 item such as ``- 다. 수행평가의 세부 계획과 … 한다.`` must
+        # never outrank the real detail section, but where a plan offers no
+        # other candidate it still marks a better start than the document top.
+        # Free-running prose stays unanchorable, as it was before.
+        if re.match(r"^\s*[-*•▪]?\s*(?:\d{1,2}|[가-하])\s*[.)]\s*", visible_text(line)):
+            return 10
     return 0
 
 
@@ -569,6 +671,15 @@ def assessment_block(subject_markdown: str) -> tuple[str, int, int, str]:
     lines = _line_offsets(subject_markdown)
     anchors = [(_anchor_score(raw), index) for index, (_, _, raw) in enumerate(lines)]
     anchors = [value for value in anchors if value[0] > 0]
+    # Deliberately ranked *below* every textual anchor (90/105): this is a
+    # last-resort anchor for plans whose own "수행평가 세부 계획" heading was
+    # lost in extraction. Ranking it higher moved the block start past
+    # assessments that a weaker-but-earlier heading had introduced correctly.
+    anchors.extend(
+        (85, index)
+        for index in range(len(lines))
+        if _introduces_assessment_detail_table(lines, index)
+    )
     if not anchors:
         return subject_markdown, 0, len(subject_markdown), "assessment_anchor_not_found"
     best_score = max(score for score, _ in anchors)
@@ -587,6 +698,33 @@ def assessment_block(subject_markdown: str) -> tuple[str, int, int, str]:
     start = lines[anchor_index][0]
     end = lines[end_index][0] if end_index < len(lines) else len(subject_markdown)
     return subject_markdown[start:end].strip(), start, end, "assessment_anchor"
+
+
+# A meta-label that a <br>-joined source cell appends after the real name.
+# The numbering is required: it is the evidence that a *new* source line was
+# glued on. Without it, "수행평가 영역별 평가 요소 및 채점 기준" is one heading,
+# not a name with a label stuck to it.
+GLUED_META_LABEL_RE = re.compile(
+    r"\s+(?:\d+\s*[).]|[가-하]\s*[).])\s*"
+    r"(?:평가\s*단원|영역별\s*성취\s*기준|성취\s*기준|평가\s*요소|채점\s*기준|"
+    r"평가\s*방법)\s*[:：]?.*$"
+)
+
+
+def strip_title_decoration(title: str) -> str:
+    """Drop source decoration that is not part of the name the school wrote.
+
+    Two artefacts ride along with an otherwise correct title: a list glyph the
+    plan uses to bullet the cell (``• 과학 페임랩 발표하기``), and -- in HWP
+    documents whose table markup arrives double-escaped -- the next ``<br>``
+    line of field labels glued onto the end of the name.  Both are formatting,
+    so they are removed from the displayed title while ``title_raw`` keeps the
+    exact source string.
+    """
+
+    cleaned = re.sub(r"^[\s•·∙‣▪▫◦●○※*・ㆍ・]+", "", title).strip()
+    cleaned = GLUED_META_LABEL_RE.sub("", cleaned).strip()
+    return re.sub(r"\s+", " ", cleaned).strip(" -:|·")
 
 
 def _clean_heading_title(raw: str) -> tuple[str, str]:
@@ -655,7 +793,7 @@ def _clean_heading_title(raw: str) -> tuple[str, str]:
             and compact_text(candidate) not in STRUCTURAL_EXACT_COMPACT
         ):
             title = candidate
-    return re.sub(r"\s+", " ", title).strip(" -:|"), title_raw
+    return strip_title_decoration(title), title_raw
 
 
 def _valid_title(title: str) -> bool:
@@ -1326,7 +1464,7 @@ def _matrix_table_items(
             alignment = segment_subject_alignment(matrix_html, subject)
             if alignment == "other" or (alignment == "unknown" and not boundary_reliable):
                 continue
-            title = _source_spelling_for_table_value(fragment, candidate)
+            title = strip_title_decoration(_source_spelling_for_table_value(fragment, candidate))
             fields = _exact_fields(matrix_html)
             rubric_html = _matched_rubric_html(value, title)
             source_html = (
@@ -1424,7 +1562,7 @@ def _hinted_table_items(
             )
             if not matching_cell:
                 continue
-            title = _source_spelling_for_table_value(fragment, matching_cell)
+            title = strip_title_decoration(_source_spelling_for_table_value(fragment, matching_cell))
             source_html = markdown_fragment_to_html(fragment)
             fields = _exact_fields(fragment)
             rubric_html = _matched_rubric_html(value, title) or _rubric_html(fragment)
@@ -1553,7 +1691,7 @@ def _summary_table_items(
                     )
                     if populated_other < 1:
                         continue
-                    title = _source_spelling_for_table_value(fragment, candidate)
+                    title = strip_title_decoration(_source_spelling_for_table_value(fragment, candidate))
                     fields = _exact_fields(row_html)
                     matched_rubric = _matched_rubric_html(block, title)
                     source_html = (
@@ -1681,6 +1819,13 @@ def _valid_plan_title(value: str) -> bool:
         or NON_TASK_TITLE_RE.fullmatch(value.strip())
         or NON_TASK_TITLE_RE.fullmatch(_clean_heading_title(value)[0])
         or is_rubric_criterion_sentence(value)
+        # An achievement-standard code identifies the curriculum statement the
+        # task is assessed against, never the task. Some compact plan matrices
+        # put nothing else in the 평가내용 cell, so the honest result is no
+        # title rather than publishing the code as the assessment's name.
+        or ACHIEVEMENT_CODE_TITLE_RE.match(strip_title_decoration(value))
+        # A bare score/percentage is a shared matrix column header.
+        or SCORE_ONLY_TITLE_RE.fullmatch(strip_title_decoration(value))
     )
 
 
