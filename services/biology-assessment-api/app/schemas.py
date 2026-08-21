@@ -165,13 +165,16 @@ class CuratedAssessmentItem(AssessmentItemSummary):
     school_name: str
     region: str
     district: str
+    # 방법 축(category)과 주제 축(topic)이 한 쌍으로 영역명을 이룬다.
     category: str
+    topic: str = ""
     priority_score: int
     priority_signals: list[str]
 
 
 class CuratedCaseListResponse(StrictModel):
     category: str
+    topic: str = ""
     items: list[CuratedAssessmentItem]
     total: int
     interpretation: str
@@ -181,6 +184,7 @@ class ReferencePageResponse(StrictModel):
     subjects: list[SubjectItem]
     facets: FacetResponse
     category: str
+    topic: str = ""
     items: list[CuratedAssessmentItem]
     total: int
     interpretation: str

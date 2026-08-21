@@ -14,24 +14,52 @@ import {
 } from "../lib/catalog-api";
 
 const CURATED_SIZE = 30;
-// 케이스 단위 action_tags와 같은 9종. 생태조사는 표본이 너무 적어(전체 16건)
-// 제외했다(2026-08-21). API의 category 패턴과 값을 맞춘다.
+// 동국대 「수행평가 영역명 활용 가이드북」 과학 교과의 방법 축 10종.
+// 영역명은 "주제(내용) × 방법"으로 설계하므로 주제 축(TOPICS)과 짝을 이룬다.
+// API의 category/topic 패턴과 값을 맞춘다.
 const CATEGORIES = [
-  { id: "inquiry", label: "주제탐구" },
-  { id: "project", label: "프로젝트" },
-  { id: "problem", label: "탐구 문제 설계" },
-  { id: "presentation", label: "설명·발표" },
-  { id: "debate", label: "토론" },
-  { id: "portfolio", label: "과정 포트폴리오" },
-  { id: "reading", label: "독서 연계" },
+  { id: "inquiry", label: "탐구" },
+  { id: "experiment", label: "실험평가" },
+  { id: "writing", label: "작성" },
   { id: "production", label: "제작" },
-  { id: "experiment", label: "실험" },
+  { id: "analysis", label: "분석" },
+  { id: "reasoning", label: "추론·설명" },
+  { id: "discussion", label: "발표·토론" },
+  { id: "measurement", label: "계산·측정" },
+  { id: "process", label: "과정평가" },
+  { id: "problem", label: "문제해결" },
+] as const;
+
+// 같은 가이드북의 주제(내용) 축 16종. 물리·화학·지구과학 주제도 포함되는데,
+// 통합과학1·과학탐구실험1이 그 내용을 실제로 다루기 때문이다.
+const TOPICS = [
+  { id: "cell", label: "세포와 물질대사" },
+  { id: "genetics", label: "유전" },
+  { id: "environment", label: "환경" },
+  { id: "nos", label: "과학적 사고" },
+  { id: "history", label: "과학사" },
+  { id: "ethics", label: "연구 윤리와 안전" },
+  { id: "matter", label: "물질의 구성" },
+  { id: "reaction", label: "화학 반응" },
+  { id: "motion", label: "운동과 힘" },
+  { id: "wave", label: "빛과 파동" },
+  { id: "electromagnetism", label: "전자기" },
+  { id: "earth", label: "지구" },
+  { id: "space", label: "우주·천체" },
+  { id: "everyday", label: "실생활" },
+  { id: "career", label: "진로" },
+  { id: "data", label: "자료" },
 ] as const;
 
 type CategoryId = (typeof CATEGORIES)[number]["id"];
+type TopicId = (typeof TOPICS)[number]["id"];
 
 function safeCurriculum(value: string | null) {
   return value === "2015" || value === "2022" ? value : "";
+}
+
+function safeTopic(value: string | null): TopicId | "" {
+  return TOPICS.some((topic) => topic.id === value) ? value as TopicId : "";
 }
 
 function safeCategory(value: string | null): CategoryId {
@@ -56,6 +84,7 @@ export default function ReferenceExplorer() {
   const [region, setRegion] = useState(parameters.get("region") || "");
   const [district, setDistrict] = useState(parameters.get("district") || "");
   const [category, setCategory] = useState<CategoryId>(safeCategory(parameters.get("category")));
+  const [topic, setTopic] = useState<TopicId | "">(safeTopic(parameters.get("topic")));
   const [facets, setFacets] = useState<FacetResponse>({ regions: [], districts: [], action_tags: [] });
   const [items, setItems] = useState<CuratedAssessmentItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -65,7 +94,7 @@ export default function ReferenceExplorer() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchCatalog<ReferencePageResponse>(`references?${apiParameters({ curriculum, subject, region, district, category, limit: CURATED_SIZE })}`, controller.signal)
+    fetchCatalog<ReferencePageResponse>(`references?${apiParameters({ curriculum, subject, region, district, category, topic: topic || undefined, limit: CURATED_SIZE })}`, controller.signal)
       .then((payload) => {
         setSubjects(payload.subjects.filter((item) => item.curriculum !== "shared"));
         setFacets(payload.facets);
@@ -76,12 +105,12 @@ export default function ReferenceExplorer() {
       .catch((reason: Error) => { if (!controller.signal.aborted) setError(reason.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [curriculum, subject, region, district, category]);
+  }, [curriculum, subject, region, district, category, topic]);
 
   useEffect(() => {
-    const query = apiParameters({ curriculum, subject, region, district, category: category === "inquiry" ? undefined : category });
+    const query = apiParameters({ curriculum, subject, region, district, category: category === "inquiry" ? undefined : category, topic: topic || undefined });
     router.replace(query ? `/references?${query}` : "/references", { scroll: false });
-  }, [curriculum, subject, region, district, category, router]);
+  }, [curriculum, subject, region, district, category, topic, router]);
 
   const courseOptions = useMemo(() => uniqueSubjectOptions(subjects, curriculum), [curriculum, subjects]);
   const activeFilterCount = [curriculum, subject, region, district].filter(Boolean).length;
@@ -115,8 +144,15 @@ export default function ReferenceExplorer() {
     </section>
 
     <section className="curatedSection referenceCuratedSection" aria-labelledby="curated-title">
-      <div className="sectionTopline"><div><span className="stepPill">유형</span><div><h2 id="curated-title">설계 방식 선택</h2><p>현재 과목·지역 조건과 유형 안에서 원문 근거가 더 많이 확인된 수행평가부터 최대 30건을 봅니다. 유형은 제목·활동 표현을 바탕으로 자동 분류하며, 같은 근거 점수 안의 순서에는 품질 의미가 없습니다.</p></div></div></div>
-      <div className="categoryTabs" role="tablist" aria-label="수행평가 유형">{CATEGORIES.map((item) => <button type="button" role="tab" aria-selected={category === item.id} className={category === item.id ? "selected" : ""} key={item.id} onClick={() => { beginReload(); setCategory(item.id); }}>{item.label}</button>)}</div>
+      <div className="sectionTopline"><div><span className="stepPill">유형</span><div><h2 id="curated-title">설계 방식 선택</h2><p>수행평가 영역명은 <strong>주제(내용) × 방법</strong>으로 설계합니다(동국대 「수행평가 영역명 활용 가이드북」 기준). 방법을 고르고 주제를 좁히면 그 조합의 실제 사례를 최대 30건 봅니다. 분류는 원문의 영역명과 학교가 표시한 평가 방법을 근거로 자동 판정하며, 같은 근거 점수 안의 순서에는 품질 의미가 없습니다.</p></div></div></div>
+      <div className="categoryTabs" role="tablist" aria-label="평가 방법">{CATEGORIES.map((item) => <button type="button" role="tab" aria-selected={category === item.id} className={category === item.id ? "selected" : ""} key={item.id} onClick={() => { beginReload(); setCategory(item.id); }}>{item.label}</button>)}</div>
+      <div className="topicFilterRow">
+        <label htmlFor="reference-topic">주제(내용)</label>
+        <select id="reference-topic" value={topic} onChange={(event) => { beginReload(); setTopic(safeTopic(event.target.value)); }}>
+          <option value="">전체 주제</option>
+          {TOPICS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+        </select>
+      </div>
       {loading ? <div className="compactLoading" role="status">설계 참고 순서를 정리하고 있습니다.</div> : null}
       {error ? <div className="errorPanel" role="alert"><strong>자료를 불러오지 못했습니다.</strong><p>{error}</p></div> : null}
       {!loading && !error && items.length ? <div className="tableScroll"><table className="curatedTable"><thead><tr><th>표시 순서</th><th>수행평가명</th><th>과목·학교</th><th>확인된 근거</th><th>확인</th></tr></thead><tbody>{items.map((item, index) => <tr key={item.item_id}><td data-label="표시 순서"><strong className="rankNumber">{index + 1}</strong></td><td data-label="수행평가명"><strong>{item.title}</strong>{item.overview ? <p>{item.overview}</p> : null}</td><td data-label="과목·학교"><span>{item.curriculum} 개정 · {item.subject}</span><small>{item.school_name}<br />{item.region}{item.district ? ` ${item.district}` : ""}</small></td><td data-label="확인된 근거"><div className="signalChips">{item.priority_signals.map((signal) => <span key={signal}>{signal}</span>)}</div></td><td data-label="확인"><Link href={`/cases/${item.case_id}?item=${item.item_id}`}>원문 표 보기 →</Link></td></tr>)}</tbody></table></div> : null}

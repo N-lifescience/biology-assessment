@@ -156,7 +156,10 @@ class CatalogRepository:
         subject: str | None,
         region: str | None = None,
         district: str | None = None,
+        topic: str | None = None,
     ) -> tuple[list[str], list[object]]:
+        # ``category`` is the 방법 axis; ``topic`` narrows the 주제 axis of the
+        # same 영역명 matrix, so passing both asks for one matrix cell.
         clauses = [
             "ranking.category = ?",
             "ranking.priority_score >= 38",
@@ -164,6 +167,9 @@ class CatalogRepository:
             "item.title_basis IN ('table', 'heading')",
         ]
         parameters: list[object] = [category]
+        if topic:
+            clauses.append("ranking.topic = ?")
+            parameters.append(topic)
         for column, value in (
             ("curriculum", curriculum),
             ("subject", subject),
@@ -544,6 +550,7 @@ class CatalogRepository:
         district: str | None,
         category: str,
         limit: int,
+        topic: str | None = None,
     ) -> list[dict[str, object]]:
         with self.connect() as connection:
             has_rankings = connection.execute(
@@ -557,17 +564,29 @@ class CatalogRepository:
                 has_district = "district" in case_columns
                 if district and not has_district:
                     return []
+                ranking_columns = {
+                    str(column[1])
+                    for column in connection.execute(
+                        "PRAGMA table_info(assessment_item_rankings)"
+                    )
+                }
+                has_topic = "topic" in ranking_columns
+                if topic and not has_topic:
+                    return []
                 clauses, parameters = self._curated_filters(
                     category=category,
                     curriculum=curriculum,
                     subject=subject,
                     region=region,
                     district=district,
+                    topic=topic if has_topic else None,
                 )
                 district_select = "cases.district" if has_district else "'' AS district"
+                topic_select = "ranking.topic" if has_topic else "'' AS topic"
                 rows = connection.execute(
                     f"""
-                    SELECT item.*, ranking.category, ranking.priority_score,
+                    SELECT item.*, ranking.category, {topic_select},
+                           ranking.priority_score,
                            ranking.priority_signals_json, cases.curriculum,
                            cases.subject, cases.school_name, cases.region, {district_select}
                     FROM assessment_items item
@@ -594,6 +613,7 @@ class CatalogRepository:
                         "region": str(row["region"]),
                         "district": str(row["district"]),
                         "category": str(row["category"]),
+                        "topic": str(row["topic"]),
                         "priority_score": int(row["priority_score"]),
                         "priority_signals": [
                             str(value)
@@ -648,15 +668,25 @@ class CatalogRepository:
         region: str | None,
         district: str | None,
         category: str,
+        topic: str | None = None,
     ) -> int:
-        clauses, parameters = self._curated_filters(
-            category=category,
-            curriculum=curriculum,
-            subject=subject,
-            region=region,
-            district=district,
-        )
         with self.connect() as connection:
+            has_topic = any(
+                str(column[1]) == "topic"
+                for column in connection.execute(
+                    "PRAGMA table_info(assessment_item_rankings)"
+                )
+            )
+            if topic and not has_topic:
+                return 0
+            clauses, parameters = self._curated_filters(
+                category=category,
+                curriculum=curriculum,
+                subject=subject,
+                region=region,
+                district=district,
+                topic=topic if has_topic else None,
+            )
             row = connection.execute(
                 f"""
                 SELECT COUNT(*)
@@ -735,6 +765,7 @@ class CatalogRepository:
         district: str | None,
         category: str,
         limit: int,
+        topic: str | None = None,
     ) -> list[dict[str, object]]:
         with self.connect() as connection:
             has_detail_items = connection.execute(

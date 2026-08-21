@@ -90,7 +90,8 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
             ),
         )
         connection.execute(
-            "INSERT INTO assessment_item_rankings VALUES (?, 'inquiry', 68, ?)",
+            # (item_id, category=방법 축, topic=주제 축, ambiguous, score, signals)
+            "INSERT INTO assessment_item_rankings VALUES (?, 'inquiry', 'cell', 0, 68, ?)",
             (item_id, json.dumps(["채점기준 원문 확인"], ensure_ascii=False)),
         )
 

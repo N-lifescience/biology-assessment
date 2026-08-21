@@ -34,8 +34,15 @@ SERVICE_VERSION: Final = "0.3.0"
 # 케이스 단위 action_tags(build_biology_assessment_evidence_index.ACTION_TAGS)와
 # 같은 9종. 생태조사는 표본이 너무 적어(전체 16건) 제외했다(2026-08-21).
 # 웹의 CATEGORIES·PatternId와 값을 맞춘다.
+# 동국대 「수행평가 영역명 활용 가이드북」의 방법 축 10종.
 CURATED_CATEGORY_PATTERN: Final = (
-    "^(inquiry|project|problem|presentation|debate|portfolio|reading|production|experiment)$"
+    "^(reasoning|measurement|experiment|problem|analysis"
+    "|discussion|writing|production|process|inquiry)$"
+)
+# 같은 가이드북의 주제(내용) 축 16종.
+CURATED_TOPIC_PATTERN: Final = (
+    "^(motion|wave|electromagnetism|matter|reaction|cell|genetics|earth"
+    "|space|environment|history|nos|ethics|everyday|career|data)$"
 )
 INTERPRETATION_CAUTION: Final = (
     "평가계획에서 과목이 발견되지 않았다는 사실은 학교가 과목을 개설하지 않았다는 뜻이 아닙니다."
@@ -250,6 +257,7 @@ def curated_cases(
     subject: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     region: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     district: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
+    topic: Annotated[str | None, Query(pattern=CURATED_TOPIC_PATTERN)] = None,
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
 ) -> dict[str, object]:
     require_region_for_district(region, district)
@@ -260,10 +268,12 @@ def curated_cases(
         region=region,
         district=district,
         category=category,
+        topic=topic,
         limit=limit,
     )
     return {
         "category": category,
+        "topic": topic or "",
         "items": items,
         "total": catalog.curated_total(
             curriculum=curriculum,
@@ -271,6 +281,7 @@ def curated_cases(
             region=region,
             district=district,
             category=category,
+            topic=topic,
         ),
         "interpretation": (
             "공개 평가계획에서 과제명, 성취기준, 채점기준, 평가방법과 과정 증거가 "
@@ -289,6 +300,7 @@ def references(
     subject: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     region: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     district: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
+    topic: Annotated[str | None, Query(pattern=CURATED_TOPIC_PATTERN)] = None,
     limit: Annotated[int, Query(ge=1, le=30)] = 30,
 ) -> dict[str, object]:
     require_region_for_district(region, district)
@@ -299,6 +311,7 @@ def references(
         region=region,
         district=district,
         category=category,
+        topic=topic,
         limit=limit,
     )
     return {
@@ -310,6 +323,7 @@ def references(
             category=category,
         ),
         "category": category,
+        "topic": topic or "",
         "items": items,
         "total": catalog.curated_total(
             curriculum=curriculum,
@@ -317,6 +331,7 @@ def references(
             region=region,
             district=district,
             category=category,
+            topic=topic,
         ),
         "interpretation": (
             "공개 평가계획에서 과제명, 성취기준, 채점기준, 평가방법과 과정 증거가 함께 "

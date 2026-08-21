@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS assessment_items (
 CREATE TABLE IF NOT EXISTS assessment_item_rankings (
     item_id TEXT PRIMARY KEY,
     category TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    category_ambiguous INTEGER NOT NULL,
     priority_score INTEGER NOT NULL,
     priority_signals_json TEXT NOT NULL
 );

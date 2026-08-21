@@ -89,6 +89,7 @@ export type CaseItem = {
 
 export type CuratedCaseListResponse = {
   category: string;
+  topic?: string;
   items: CuratedAssessmentItem[];
   total: number;
   interpretation: string;
@@ -131,7 +132,9 @@ export type CuratedAssessmentItem = AssessmentItemSummary & {
   school_name: string;
   region: string;
   district: string;
+  // 영역명의 두 축: category=방법, topic=주제(내용).
   category: string;
+  topic?: string;
   priority_score: number;
   priority_signals: string[];
 };
