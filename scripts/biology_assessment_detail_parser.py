@@ -97,6 +97,32 @@ NON_TASK_TITLE_RE = re.compile(
     r"[12]\s*(?:차|회)|정기\s*(?:고사|시험)(?:\s*\(\s*\d+%\s*\))?|"
     r"선택형|서[·‧ㆍ]?논술형)$"
 )
+RUBRIC_SENTENCE_ENDING_RE = re.compile(r"(?:다|음|함|됨|경우)$")
+RUBRIC_SENTENCE_VOCABULARY_RE = re.compile(
+    r"부족|미흡|충족|만족|참여|제출|응시|모호|불명확|불충분|없음|않음|못함|요함|"
+    r"우수|노력|결석|보통|충분|정확|적절|근거|논리|오류|누락"
+)
+
+
+def is_rubric_criterion_sentence(title: str) -> bool:
+    """Detect a rubric grading-scale descriptor mis-captured as a task title.
+
+    Performance-level tables ("A 수준: ...", "미흡함") sit in the same cells a
+    real task name would occupy when a school's table has no explicit label
+    row, so the parser sometimes has nothing else to offer as a title. These
+    never carry the sentence-final ending the case-level legacy path already
+    filters on a literal period ("...한다."); table cells routinely drop the
+    period, so the same ending is checked with or without one. A short title
+    ending this way (a teacher's own stylised phrase, e.g. "과학을 찾다") is
+    only rejected when it also uses grading vocabulary, to avoid mistaking a
+    genuine title for a rubric line just because both end in the same syllable.
+    """
+
+    stripped = title.strip()
+    if not RUBRIC_SENTENCE_ENDING_RE.search(stripped):
+        return False
+    compact = compact_text(stripped)
+    return len(compact) > 12 or bool(RUBRIC_SENTENCE_VOCABULARY_RE.search(stripped))
 STRUCTURAL_HEADING_RE = re.compile(
     r"^(?:평가\s*개요(?:표)?|채점\s*기준표?|공통\s*(?:사항|유의\s*사항)|개요|영역|"
     r"세부\s*내용\s*및\s*평가\s*척도표|세부\s*(?:채점\s*)?기준|피드백\s*및\s*기록|"
@@ -295,9 +321,30 @@ def subjects_for_standard_codes(codes: list[str]) -> set[str]:
     return matched
 
 
+CHECKED_BOX_ARTIFACT_RE = re.compile(r"gfedcb")
+UNCHECKED_BOX_ARTIFACT_RE = re.compile(r"gfedc(?!b)")
+
+
+def normalize_checkbox_glyphs(value: str) -> str:
+    """Restore a Hangul checkbox that HWP/PDF text extraction flattened.
+
+    Source plans draw checkboxes with a symbol font whose five box-outline
+    strokes and one checkmark stroke sit at the Latin-letter code points
+    g,f,e,d,c(,b). Extraction reads those code points as literal text, so a
+    checked box survives as "gfedcb" and an unchecked one as "gfedc". This is
+    confirmed against several source documents, not a guess: the letters
+    never occur elsewhere in these plans, and "gfedcb" always precedes the
+    option a school marked, "gfedc" the ones it did not.
+    """
+
+    value = CHECKED_BOX_ARTIFACT_RE.sub("☑", value)
+    return UNCHECKED_BOX_ARTIFACT_RE.sub("□", value)
+
+
 def visible_text(value: str) -> str:
     value = re.sub(r"<br\s*/?>", " ", value, flags=re.I)
     value = re.sub(r"<[^>]+>", " ", value)
+    value = normalize_checkbox_glyphs(value)
     return re.sub(r"\s+", " ", html.unescape(value)).strip(" |#*:-")
 
 
@@ -1596,6 +1643,7 @@ def _valid_plan_title(value: str) -> bool:
         # so both spellings have to be checked.
         or NON_TASK_TITLE_RE.fullmatch(value.strip())
         or NON_TASK_TITLE_RE.fullmatch(_clean_heading_title(value)[0])
+        or is_rubric_criterion_sentence(value)
     )
 
 
@@ -1688,7 +1736,7 @@ class _SafeTableParser(StdlibHTMLParser):
             self.output.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
-        self.output.append(html.escape(data))
+        self.output.append(html.escape(normalize_checkbox_glyphs(data)))
 
 
 def sanitize_table_html(value: str) -> str:
@@ -1721,7 +1769,44 @@ def markdown_fragment_to_html(markdown: str) -> str:
                 index += 1
                 if depth <= 0:
                     break
-            output.append(sanitize_table_html("\n".join(chunk)))
+            merged = "\n".join(chunk)
+            # A source page break can close a <table> mid-row -- commonly
+            # mid-rowspan -- and reopen a fresh <table> for the remaining
+            # rows. Nothing legitimate separates two tables by blank lines
+            # alone: a real second table is always introduced by a heading or
+            # a label line first. Fuse the closing/reopening tags back into
+            # one continuous table so the reader sees the original one table,
+            # not two boxes with an unexplained gap and a mid-row cut.
+            while index < len(lines):
+                lookahead = index
+                while lookahead < len(lines) and not lines[lookahead].strip():
+                    lookahead += 1
+                if lookahead >= len(lines) or not re.match(
+                    r"\s*<table\b", lines[lookahead], flags=re.I
+                ):
+                    break
+                next_chunk: list[str] = []
+                depth = 0
+                cursor = lookahead
+                while cursor < len(lines):
+                    current = lines[cursor]
+                    next_chunk.append(current)
+                    depth += len(re.findall(r"<table\b", current, flags=re.I))
+                    depth -= len(re.findall(r"</table>", current, flags=re.I))
+                    cursor += 1
+                    if depth <= 0:
+                        break
+                merged = re.sub(r"</table>\s*$", "", merged.rstrip())
+                continuation = re.sub(
+                    r"^\s*<table\b[^>]*>",
+                    "",
+                    "\n".join(next_chunk).lstrip(),
+                    count=1,
+                    flags=re.I,
+                )
+                merged = merged + "\n" + continuation
+                index = cursor
+            output.append(sanitize_table_html(merged))
             continue
         if (
             line.strip().startswith("|")
@@ -1769,7 +1854,7 @@ def balance_table_tags(value: str) -> str:
 
 
 def _inline_html(value: str) -> str:
-    escaped = html.escape(html.unescape(value))
+    escaped = html.escape(normalize_checkbox_glyphs(html.unescape(value)))
     escaped = re.sub(r"&lt;br\s*/?&gt;", "<br>", escaped, flags=re.I)
     escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
     return escaped
@@ -1843,7 +1928,9 @@ def parse_assessment_section(
         for order, (_, start, title, title_raw) in enumerate(headings, 1):
             end = headings[order][1] if order < len(headings) else len(block)
             segment = block[start:end].strip()
-            structural_heading = heading_title_is_structural(title)
+            structural_heading = heading_title_is_structural(
+                title
+            ) or is_rubric_criterion_sentence(title)
             subject_alignment = segment_subject_alignment(segment, subject)
             subject_boundary_reliable = not (
                 subject_alignment == "other"

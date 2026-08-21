@@ -14,15 +14,18 @@ import {
 } from "../lib/catalog-api";
 
 const CURATED_SIZE = 30;
-// 시드 목록이다. 실제 생명과학 평가계획을 분석한 뒤 유형이 늘어날 수 있다
-// (프로젝트·보고서·토론·제작·실험 등). API의 category 패턴과 값을 맞춘다.
+// 케이스 단위 action_tags와 같은 9종. 생태조사는 표본이 너무 적어(전체 16건)
+// 제외했다(2026-08-21). API의 category 패턴과 값을 맞춘다.
 const CATEGORIES = [
   { id: "inquiry", label: "주제탐구" },
-  { id: "ecology", label: "생태 조사" },
+  { id: "project", label: "프로젝트" },
   { id: "problem", label: "탐구 문제 설계" },
   { id: "presentation", label: "설명·발표" },
+  { id: "debate", label: "토론" },
   { id: "portfolio", label: "과정 포트폴리오" },
   { id: "reading", label: "독서 연계" },
+  { id: "production", label: "제작" },
+  { id: "experiment", label: "실험" },
 ] as const;
 
 type CategoryId = (typeof CATEGORIES)[number]["id"];

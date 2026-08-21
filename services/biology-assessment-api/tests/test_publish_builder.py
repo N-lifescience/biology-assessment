@@ -466,6 +466,7 @@ def test_unbounded_items_leave_the_case_fields_alone() -> None:
 
 
 def test_category_is_empty_when_no_seed_tag_matches() -> None:
-    assert category_for(["토론"]) == ""
+    assert category_for(["생태조사"]) == ""
     assert category_for(["탐구"]) == "inquiry"
-    assert category_for(["생태조사", "탐구"]) == "ecology"
+    assert category_for(["토론", "탐구"]) == "inquiry"
+    assert category_for(["실험"]) == "experiment"
