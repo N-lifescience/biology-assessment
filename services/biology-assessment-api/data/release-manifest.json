@@ -2,11 +2,11 @@
   "files": [
     {
       "name": "biology_assessment_catalog.sqlite",
-      "sha256": "719738d8b9a41f22be98cfb73f9741adf4784dbb3467f081d33e833b509c7516"
+      "sha256": "0118d96edf18b2f11e2d0cf705d5f2d7432fce80b030fc514570b0f40f709542"
     },
     {
       "name": "biology_assessment_catalog_detail.sqlite",
-      "sha256": "719738d8b9a41f22be98cfb73f9741adf4784dbb3467f081d33e833b509c7516"
+      "sha256": "0118d96edf18b2f11e2d0cf705d5f2d7432fce80b030fc514570b0f40f709542"
     }
   ]
 }
