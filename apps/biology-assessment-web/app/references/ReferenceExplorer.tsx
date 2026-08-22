@@ -13,6 +13,8 @@ import {
   type SubjectItem,
 } from "../lib/catalog-api";
 
+// 한 화면 분량. 조합당 사례가 수백 건이라 상위 몇 건만 보여주면 그 아래가
+// 있는지조차 알 수 없으므로, 끝까지 넘겨볼 수 있게 페이지로 나눈다.
 const CURATED_SIZE = 30;
 // 동국대 「수행평가 영역명 활용 가이드북」 과학 교과의 방법 축 10종.
 // 영역명은 "주제(내용) × 방법"으로 설계하므로 주제 축(TOPICS)과 짝을 이룬다.
@@ -49,6 +51,10 @@ const TOPICS = [
   { id: "everyday", label: "실생활" },
   { id: "career", label: "진로" },
   { id: "data", label: "자료" },
+  // 17번째. 이름이 방법·과정 어휘로만 되어 있어 다룰 내용을 학생이 정하는 과제
+  // (「포트폴리오」, 「자유 주제 탐구」). 주제를 학생이 고르게 하는 방식 자체가
+  // 설계 참고가 되므로 미분류로 숨기지 않고 고를 수 있게 둔다.
+  { id: "free", label: "자유 주제" },
 ] as const;
 
 type CategoryId = (typeof CATEGORIES)[number]["id"];
@@ -85,6 +91,7 @@ export default function ReferenceExplorer() {
   const [district, setDistrict] = useState(parameters.get("district") || "");
   const [category, setCategory] = useState<CategoryId>(safeCategory(parameters.get("category")));
   const [topic, setTopic] = useState<TopicId | "">(safeTopic(parameters.get("topic")));
+  const [offset, setOffset] = useState(0);
   const [facets, setFacets] = useState<FacetResponse>({ regions: [], districts: [], action_tags: [] });
   const [items, setItems] = useState<CuratedAssessmentItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -94,7 +101,7 @@ export default function ReferenceExplorer() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchCatalog<ReferencePageResponse>(`references?${apiParameters({ curriculum, subject, region, district, category, topic: topic || undefined, limit: CURATED_SIZE })}`, controller.signal)
+    fetchCatalog<ReferencePageResponse>(`references?${apiParameters({ curriculum, subject, region, district, category, topic: topic || undefined, limit: CURATED_SIZE, offset: offset || undefined })}`, controller.signal)
       .then((payload) => {
         setSubjects(payload.subjects.filter((item) => item.curriculum !== "shared"));
         setFacets(payload.facets);
@@ -105,7 +112,7 @@ export default function ReferenceExplorer() {
       .catch((reason: Error) => { if (!controller.signal.aborted) setError(reason.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [curriculum, subject, region, district, category, topic]);
+  }, [curriculum, subject, region, district, category, topic, offset]);
 
   useEffect(() => {
     const query = apiParameters({ curriculum, subject, region, district, category: category === "inquiry" ? undefined : category, topic: topic || undefined });
@@ -114,8 +121,11 @@ export default function ReferenceExplorer() {
 
   const courseOptions = useMemo(() => uniqueSubjectOptions(subjects, curriculum), [curriculum, subjects]);
   const activeFilterCount = [curriculum, subject, region, district].filter(Boolean).length;
+  const totalPages = Math.max(1, Math.ceil(total / CURATED_SIZE));
+  const currentPage = Math.floor(offset / CURATED_SIZE) + 1;
 
-  function beginReload() { setLoading(true); setError(""); }
+  // 조건이 바뀌면 결과 집합 자체가 달라지므로 항상 첫 페이지로 돌아간다.
+  function beginReload() { setLoading(true); setError(""); setOffset(0); }
   function changeCurriculum(value: string) {
     const next = uniqueSubjectOptions(subjects, value);
     beginReload(); setCurriculum(value); setSubject(next.some((item) => item.subject === subject) ? subject : ""); setRegion(""); setDistrict("");
@@ -125,7 +135,7 @@ export default function ReferenceExplorer() {
   return <main id="main-content" className="catalogPage referencePage">
     <header className="pageHeaderCompact">
       <div><p className="breadcrumb"><Link href="/">홈</Link><span>/</span>유형별 설계 참고</p><h1>유형별 원문 근거 확인도</h1></div>
-      <p><strong>{total.toLocaleString()}</strong><span>조건 내 참고 후보<br />상위 {items.length.toLocaleString()}건 표시</span></p>
+      <p><strong>{total.toLocaleString()}</strong><span>조건 내 참고 후보<br />{total ? `${(offset + 1).toLocaleString()}–${(offset + items.length).toLocaleString()}건 표시` : "표시할 사례 없음"}</span></p>
     </header>
 
     <section className="referenceBoundary" aria-label="원문 근거 확인도 기준">
@@ -144,18 +154,22 @@ export default function ReferenceExplorer() {
     </section>
 
     <section className="curatedSection referenceCuratedSection" aria-labelledby="curated-title">
-      <div className="sectionTopline"><div><span className="stepPill">유형</span><div><h2 id="curated-title">설계 방식 선택</h2><p>수행평가 영역명은 <strong>주제(내용) × 방법</strong>으로 설계합니다(동국대 「수행평가 영역명 활용 가이드북」 기준). 방법을 고르고 주제를 좁히면 그 조합의 실제 사례를 최대 30건 봅니다. 분류는 원문의 영역명과 학교가 표시한 평가 방법을 근거로 자동 판정하며, 같은 근거 점수 안의 순서에는 품질 의미가 없습니다.</p></div></div></div>
-      <div className="categoryTabs" role="tablist" aria-label="평가 방법">{CATEGORIES.map((item) => <button type="button" role="tab" aria-selected={category === item.id} className={category === item.id ? "selected" : ""} key={item.id} onClick={() => { beginReload(); setCategory(item.id); }}>{item.label}</button>)}</div>
-      <div className="topicFilterRow">
-        <label htmlFor="reference-topic">주제(내용)</label>
-        <select id="reference-topic" value={topic} onChange={(event) => { beginReload(); setTopic(safeTopic(event.target.value)); }}>
-          <option value="">전체 주제</option>
-          {TOPICS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-        </select>
+      <div className="sectionTopline"><div><span className="stepPill">유형</span><div><h2 id="curated-title">설계 방식 선택</h2><p><strong>주제</strong>를 고르고 <strong>방법</strong>을 고르면, 그 조합의 실제 사례가 나옵니다.</p></div></div></div>
+      <div className="filterControls topicFilterRow">
+        <label>
+          <span>주제(내용)</span>
+          <select value={topic} onChange={(event) => { beginReload(); setTopic(safeTopic(event.target.value)); }}>
+            <option value="">전체 주제</option>
+            {TOPICS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+          </select>
+        </label>
       </div>
+      <div className="categoryTabs" role="tablist" aria-label="평가 방법">{CATEGORIES.map((item) => <button type="button" role="tab" aria-selected={category === item.id} className={category === item.id ? "selected" : ""} key={item.id} onClick={() => { beginReload(); setCategory(item.id); }}>{item.label}</button>)}</div>
+      <p className="rankingBoundary">주제 × 방법 분류는 동국대 「수행평가 영역명 활용 가이드북」 기준이며, 원문의 영역명과 학교가 표시한 평가 방법으로 자동 판정합니다. 표시 순서에 품질 의미는 없습니다.</p>
       {loading ? <div className="compactLoading" role="status">설계 참고 순서를 정리하고 있습니다.</div> : null}
       {error ? <div className="errorPanel" role="alert"><strong>자료를 불러오지 못했습니다.</strong><p>{error}</p></div> : null}
-      {!loading && !error && items.length ? <div className="tableScroll"><table className="curatedTable"><thead><tr><th>표시 순서</th><th>수행평가명</th><th>과목·학교</th><th>확인된 근거</th><th>확인</th></tr></thead><tbody>{items.map((item, index) => <tr key={item.item_id}><td data-label="표시 순서"><strong className="rankNumber">{index + 1}</strong></td><td data-label="수행평가명"><strong>{item.title}</strong>{item.overview ? <p>{item.overview}</p> : null}</td><td data-label="과목·학교"><span>{item.curriculum} 개정 · {item.subject}</span><small>{item.school_name}<br />{item.region}{item.district ? ` ${item.district}` : ""}</small></td><td data-label="확인된 근거"><div className="signalChips">{item.priority_signals.map((signal) => <span key={signal}>{signal}</span>)}</div></td><td data-label="확인"><Link href={`/cases/${item.case_id}?item=${item.item_id}`}>원문 표 보기 →</Link></td></tr>)}</tbody></table></div> : null}
+      {!loading && !error && items.length ? <div className="tableScroll"><table className="curatedTable"><thead><tr><th>표시 순서</th><th>수행평가명</th><th>과목·학교</th><th>확인된 근거</th><th>확인</th></tr></thead><tbody>{items.map((item, index) => <tr key={item.item_id}><td data-label="표시 순서"><strong className="rankNumber">{offset + index + 1}</strong></td><td data-label="수행평가명"><strong>{item.title}</strong>{item.overview ? <p>{item.overview}</p> : null}</td><td data-label="과목·학교"><span>{item.curriculum} 개정 · {item.subject}</span><small>{item.school_name}<br />{item.region}{item.district ? ` ${item.district}` : ""}</small></td><td data-label="확인된 근거"><div className="signalChips">{item.priority_signals.map((signal) => <span key={signal}>{signal}</span>)}</div></td><td data-label="확인"><Link href={`/cases/${item.case_id}?item=${item.item_id}`}>원문 표 보기 →</Link></td></tr>)}</tbody></table></div> : null}
+      {!loading && !error && totalPages > 1 ? <nav className="pagination" aria-label="참고 사례 페이지"><button type="button" disabled={offset === 0} onClick={() => { setLoading(true); setError(""); setOffset(Math.max(0, offset - CURATED_SIZE)); }}>← 이전</button><span><strong>{currentPage}</strong> / {totalPages}</span><button type="button" disabled={offset + CURATED_SIZE >= total} onClick={() => { setLoading(true); setError(""); setOffset(offset + CURATED_SIZE); }}>다음 →</button></nav> : null}
       {!loading && !error && items.length === 0 ? <p className="compactEmpty">이 조건에서 원문 표 제목·구조까지 확인된 설계 참고 사례가 아직 없습니다. 전체 라이브러리에서 원문 묶음도 함께 찾아볼 수 있습니다.</p> : null}
       {interpretation ? <p className="rankingBoundary">{interpretation}</p> : null}
     </section>

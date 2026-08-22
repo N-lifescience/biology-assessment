@@ -35,6 +35,7 @@ TOPIC_CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
         # than mechanics. "반작용" keeps the mechanics sense.
         "역학", "운동", "힘", "속도", "가속도", "반작용",
         "마찰", "낙하", "단진자", "충돌", "충격량", "운동량",
+        "중력", "구조물", "충격", "경사면", "관성",
     )),
     ("wave", "빛과 파동", ("빛", "파동", "스펙트럼", "백색광", "굴절", "간섭")),
     ("electromagnetism", "전자기", (
@@ -44,6 +45,8 @@ TOPIC_CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
     ("matter", "물질의 구성", (
         # "구조"/"성질" dropped: 세포의 구조, 염색체 구조 dominate this corpus.
         "물질", "원자", "분자", "결합", "원소", "주기율표", "광물",
+        "알칼리금속", "알칼리 금속", "할로젠", "이온", "전자배치", "전자 배치",
+        "밀도", "신소재",
     )),
     ("reaction", "화학 반응", (
         # "변화" dropped: 기후 변화/개체수 변화 outnumber chemical change here.
@@ -59,6 +62,15 @@ TOPIC_CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
         "단백질", "아미노산", "미토콘드리아", "엽록체", "소기관", "atp", "확산",
         "항원", "항체", "백신", "병원체", "질병", "뉴런", "시냅스", "근수축",
         "자극", "감각", "인슐린", "체온", "물질대사", "생명시스템", "핵산합성",
+        # 미검출 표본에서 실제로 쓰인 관찰 도구·재료·기관 어휘. 「물벼룩의 심장
+        # 박동 관찰」, 「시금치 잎의 색소 분리 실험」처럼 다루는 내용이 분명한데도
+        # 가이드북 예시 단어에 없어서 미분류로 남던 것들이다.
+        "현미경", "프레파라트", "표본", "혈구", "물벼룩", "시금치", "양파", "효모",
+        "색소", "심장", "박동", "소화제", "영양소", "아밀레이스", "카탈레이스",
+        "과산화수소", "항생", "리포솜", "배양", "혈장", "적혈구", "백혈구", "혈관",
+        # 한 글자 어휘(간·위·장·폐)는 넣지 않는다. 공백을 지우고 부분 문자열로
+        # 맞추므로 "인간", "단위", "문장"에까지 걸린다.
+        "콩팥", "근육", "인체", "약물", "영양",
     )),
     ("genetics", "유전", (
         # "정보" dropped: 자료·정보 is generic wording across every topic.
@@ -66,10 +78,11 @@ TOPIC_CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
         "돌연변이", "유전자", "분류", "계통",
         "감수분열", "체세포분열", "가계도", "유전병", "전사", "번역", "복제",
         "형질전환", "혈액형", "생명공학", "유전체", "rna",
+        "핵형", "계통수", "유연관계", "멘델", "우열", "대립유전자",
     )),
     ("earth", "지구", (
         "지구", "기후", "대기", "해양", "판 경계", "관측", "지진", "지질", "판의 경계",
-        "지권", "암석",
+        "지권", "암석", "화산", "지층", "화석", "기온", "강수", "태풍", "빙하",
     )),
     ("space", "우주·천체", ("우주", "천체", "태양", "행성", "별", "은하")),
     ("environment", "환경", (
@@ -77,9 +90,15 @@ TOPIC_CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
         "외래종", "생물다양성", "생태계", "평형", "보호", "적정 기술", "군집", "개체군",
         "천이", "먹이사슬", "먹이그물", "물질순환", "에너지흐름", "방형구", "기후변화",
     )),
-    ("history", "과학사", ("역사", "과학사", "발전", "과학자", "패러다임")),
+    ("history", "과학사", (
+        "역사", "과학사", "발전", "과학자", "패러다임",
+        # 코퍼스가 과학사 과제를 인물 이름으로 부르는 경우가 많다.
+        "갈릴레이", "파스퇴르", "멘델레예프", "뉴턴", "다윈", "허시", "메셀슨",
+        "라부아지에", "자격루", "선조", "도량형", "속생설",
+    )),
     ("nos", "과학적 사고", (
         "과학의 본성", "과학적 탐구 방법", "귀납적", "연역적", "탐구 방법", "본성",
+        "귀납", "연역", "가설 설정", "변인", "탐구 과정", "탐구 절차",
     )),
     ("ethics", "연구 윤리와 안전", (
         # "사고" dropped: it reads as both 안전사고 and 과학적 사고.
@@ -92,7 +111,9 @@ TOPIC_CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
         "도서", "독후",
     )),
     # "자료" alone is dropped: 자료 조사 appears in tasks of every topic.
-    ("data", "자료", ("데이터", "AI", "MBL", "시뮬레이션", "그래프", "통계")),
+    ("data", "자료", (
+        "데이터", "AI", "MBL", "시뮬레이션", "그래프", "통계", "빅데이터", "센서",
+    )),
 ]
 
 METHOD_CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
@@ -142,7 +163,18 @@ DECLARED_METHOD_TO_AXIS: list[tuple[str, str]] = [
 TICKED_BOX_RE = re.compile(r"[■☑☒✓✔þＶ]|□\s*[VvＶ]")
 
 
-def declared_method_axis(method: str) -> tuple[str, list[str]]:
+def _normalize(value: str) -> str:
+    """Fold to a spacing-insensitive form.
+
+    Schools write the same term both ways ("과학적 탐구방법" / "과학적 탐구 방법",
+    "판 경계" / "판경계"), so keeping spaces made the guidebook's own example
+    words miss the source wording they were taken from.
+    """
+
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value)).lower()
+
+
+def declared_method_axes(method: str) -> list[str]:
     """Map the school's own ticked 평가 방법 onto the method axis.
 
     Only ticked options count: a source cell normally prints the entire menu,
@@ -151,7 +183,7 @@ def declared_method_axis(method: str) -> tuple[str, list[str]]:
 
     text = re.sub(r"\s+", " ", method).strip()
     if not text:
-        return "", []
+        return []
     if TICKED_BOX_RE.search(text):
         picked = [
             TICKED_BOX_RE.sub("", segment).strip(" ·|")
@@ -167,24 +199,47 @@ def declared_method_axis(method: str) -> tuple[str, list[str]]:
             if needle in compact and axis not in found:
                 found.append(axis)
                 break
-    if not found:
-        return "", []
-    return found[0], found[1:]
+    return found
 
+
+# 주제 축의 17번째 값. 어휘가 모자라서 못 찾은 것이 아니라, 이름이 방법·과정
+# 어휘로만 되어 있어 다룰 내용을 학생이 정하는 과제다(「포트폴리오」, 「자유 주제
+# 탐구」, 「주제 탐구 보고서」). 주제를 정하는 방식 자체가 설계 참고가 되므로
+# 미분류로 숨기지 않고 고를 수 있는 항목으로 둔다.
+FREE_TOPIC = "free"
 
 TOPIC_LABELS = {key: label for key, label, _ in TOPIC_CATEGORIES}
+TOPIC_LABELS[FREE_TOPIC] = "자유 주제"
 METHOD_LABELS = {key: label for key, label, _ in METHOD_CATEGORIES}
 
+# 탐구는 나머지 아홉 개와 같은 층위가 아니다. 실험도 조사도 프로젝트도 탐구라서,
+# 「탐구 실험」·「탐구 보고서」처럼 구체적인 방법과 나란히 적힌 이름이 코퍼스의
+# 대부분이다. 구체적인 방법이 함께 잡히면 탐구는 뺀다 — 그러지 않으면 탐구 탭이
+# 사실상 전체 목록이 되어 아무것도 좁혀주지 못한다.
+UMBRELLA_METHOD = "inquiry"
 
-def _normalize(value: str) -> str:
-    """Fold to a spacing-insensitive form.
+# 이름을 이루는 단어가 이것뿐이면 다룰 내용이 이름에 없다. 방법 축 예시 단어에
+# 더해, 어느 주제에나 붙는 일반 명사를 함께 센다.
+CONTENT_FREE_EXTRA_WORDS = (
+    "과학", "과학적", "수행평가", "평가", "활동", "주제", "자유", "자율", "심화",
+    "학습", "수업", "교과", "내용", "결과", "과정", "능력", "자료", "개념", "질문",
+    "영역", "차시", "단원", "개별", "모둠", "협력", "학습지", "형성평가", "만들기",
+    "쓰기", "하기", "수행", "및", "평가지",
+)
+_CONTENT_FREE_WORDS = {
+    _normalize(word)
+    for _, _, words in METHOD_CATEGORIES
+    for word in words
+} | {_normalize(word) for word in CONTENT_FREE_EXTRA_WORDS}
 
-    Schools write the same term both ways ("과학적 탐구방법" / "과학적 탐구 방법",
-    "판 경계" / "판경계"), so keeping spaces made the guidebook's own example
-    words miss the source wording they were taken from.
-    """
 
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value)).lower()
+def is_content_free_name(title: str) -> bool:
+    """True when every word in the name is a method or a filler noun."""
+
+    tokens = re.findall(r"[가-힣A-Za-z]{2,}", unicodedata.normalize("NFKC", title))
+    if not tokens:
+        return False
+    return all(_normalize(token) in _CONTENT_FREE_WORDS for token in tokens)
 
 
 def _score(text: str, words: tuple[str, ...]) -> tuple[int, int]:
@@ -202,61 +257,65 @@ def _score(text: str, words: tuple[str, ...]) -> tuple[int, int]:
 
 def _classify(
     text: str, categories: list[tuple[str, str, tuple[str, ...]]]
-) -> tuple[str, list[str]]:
-    """Pick the best-supported category, and report every close rival.
+) -> list[str]:
+    """Return every category the name genuinely supports, best-supported first.
 
-    A longer matched word wins over a merely more frequent one: "생물다양성"
-    (환경) is more specific evidence than the single character "빛" happening
-    to appear. Ties are not broken by list order -- they are returned as
-    rivals so a human can settle them, because the guidebook gives no rule
-    for a 영역명 that genuinely spans two categories.
+    A longer matched word is stronger evidence than a merely more frequent
+    one: "생물다양성" (환경) says more than the single character "빛" happening
+    to appear.  Categories tied at the top are all kept rather than one being
+    picked: the guidebook gives no rule for a 영역명 that spans two, and in
+    this corpus it usually spans them for real -- 「중화 반응 실험 및 해석」 is
+    both 실험평가 and 추론·설명.  A teacher looking for either should find it.
     """
 
     normalized = _normalize(text)
     if not normalized:
-        return "", []
+        return []
     scored = []
     for key, _, words in categories:
         hits, longest = _score(normalized, words)
         if hits:
             scored.append((longest, hits, key))
     if not scored:
-        return "", []
+        return []
     scored.sort(reverse=True)
-    best_longest, best_hits, best_key = scored[0]
-    rivals = [
+    best_longest, best_hits, _ = scored[0]
+    return [
         key
-        for longest, hits, key in scored[1:]
+        for longest, hits, key in scored
         if longest == best_longest and hits == best_hits
     ]
-    return best_key, rivals
 
 
 def classify_area_name(
     title: str, overview: str = "", declared_method: str = ""
 ) -> dict[str, object]:
-    """Classify one 영역명 into topic × method.
+    """Classify one 영역명 onto the topic × method matrix.
 
-    The title carries the school's own naming of the task and is what the
-    guidebook categorises, so it is scored first; the overview only fills an
-    axis the title left empty rather than competing with it.
+    Both axes carry a list, not one value.  The title carries the school's own
+    naming of the task and is what the guidebook categorises, so it is scored
+    first; the overview and the school's ticked 평가 방법 only fill an axis the
+    title left empty rather than competing with it.
     """
 
-    topic, topic_rivals = _classify(title, TOPIC_CATEGORIES)
-    method, method_rivals = _classify(title, METHOD_CATEGORIES)
-    if not topic and overview:
-        topic, topic_rivals = _classify(overview, TOPIC_CATEGORIES)
-    # The guidebook categorises the 영역명 itself, so the title keeps priority;
-    # the school's ticked 평가 방법 fills an axis the title left empty rather
-    # than overruling a name that already states its method.
-    if not method:
-        method, method_rivals = declared_method_axis(declared_method)
-    if not method and overview:
-        method, method_rivals = _classify(overview, METHOD_CATEGORIES)
+    topics = _classify(title, TOPIC_CATEGORIES)
+    methods = _classify(title, METHOD_CATEGORIES)
+    if not topics and overview:
+        topics = _classify(overview, TOPIC_CATEGORIES)
+    if not methods:
+        methods = declared_method_axes(declared_method)
+    if not methods and overview:
+        methods = _classify(overview, METHOD_CATEGORIES)
+    concrete = [key for key in methods if key != UMBRELLA_METHOD]
+    methods = concrete or methods
+    if not topics and is_content_free_name(title):
+        topics = [FREE_TOPIC]
     return {
-        "topic": topic,
-        "method": method,
-        "topic_rivals": topic_rivals,
-        "method_rivals": method_rivals,
-        "ambiguous": bool(topic_rivals or method_rivals) or not topic or not method,
+        "topics": topics,
+        "methods": methods,
+        # Kept as the single value used for display and ordering; the lists
+        # above are what a filter matches against.
+        "topic": topics[0] if topics else "",
+        "method": methods[0] if methods else "",
+        "ambiguous": len(topics) > 1 or len(methods) > 1 or not topics or not methods,
     }

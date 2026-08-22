@@ -136,6 +136,18 @@ CREATE TABLE assessment_item_rankings (
 );
 CREATE INDEX idx_assessment_item_rankings_topic ON assessment_item_rankings(topic);
 
+-- Every 주제/방법 an item honestly belongs to, not just the best-supported one.
+-- 「탐구 실험 보고서」 is 실험평가 and 작성 at once, and a teacher browsing either
+-- should find it; ``assessment_item_rankings`` keeps one value per axis for
+-- display and ordering, this table is what a filter matches against.
+CREATE TABLE assessment_item_axes (
+    item_id TEXT NOT NULL,
+    axis TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (item_id, axis, value)
+) WITHOUT ROWID;
+CREATE INDEX idx_assessment_item_axes_lookup ON assessment_item_axes(axis, value);
+
 CREATE TABLE case_detail_status (
     case_id TEXT PRIMARY KEY,
     source_format TEXT NOT NULL,
@@ -1034,7 +1046,9 @@ def load_subject_stats(
     print(f"subject_stats={len(stats_rows)} subject_action_tags={len(tag_rows)}")
 
 
-def item_category_and_signals(item) -> tuple[str, str, bool, list[str]]:
+def item_category_and_signals(
+    item,
+) -> tuple[str, str, bool, list[str], list[str], list[str]]:
     """Classify one item on the 주제 × 방법 matrix and list its evidence fields.
 
     The axes come from 동국대 「수행평가 영역명 활용 가이드북」 (see
@@ -1052,6 +1066,8 @@ def item_category_and_signals(item) -> tuple[str, str, bool, list[str]]:
     area = classify_area_name(item.title, item.overview, item.method)
     category = str(area["method"])
     topic = str(area["topic"])
+    methods = [str(value) for value in area["methods"]]  # type: ignore[union-attr]
+    topics = [str(value) for value in area["topics"]]  # type: ignore[union-attr]
     ambiguous = bool(area["ambiguous"])
     signals = [
         name
@@ -1064,7 +1080,7 @@ def item_category_and_signals(item) -> tuple[str, str, bool, list[str]]:
         )
         if present
     ]
-    return category, topic, ambiguous, signals
+    return category, topic, ambiguous, signals, methods, topics
 
 
 def source_format_for(saved_path: str) -> str:
@@ -1176,6 +1192,7 @@ def load_case_details(
 
     item_rows = []
     ranking_rows = []
+    axis_rows = []
     status_rows = []
     title_basis_updates = []
     total_items = 0
@@ -1196,15 +1213,21 @@ def load_case_details(
                 source_format,
                 item_rows,
                 ranking_rows,
+                axis_rows,
                 status_rows,
                 title_basis_updates,
             )
         if len(item_rows) >= 2000:
             total_items += _flush_detail_rows(
-                connection, item_rows, ranking_rows, status_rows, title_basis_updates
+                connection,
+                item_rows,
+                ranking_rows,
+                axis_rows,
+                status_rows,
+                title_basis_updates,
             )
     total_items += _flush_detail_rows(
-        connection, item_rows, ranking_rows, status_rows, title_basis_updates
+        connection, item_rows, ranking_rows, axis_rows, status_rows, title_basis_updates
     )
     parsed_cases = connection.execute("SELECT COUNT(*) FROM case_detail_status").fetchone()[0]
     confirmed_cases = connection.execute(
@@ -1223,6 +1246,7 @@ def _flush_detail_rows(
     connection: sqlite3.Connection,
     item_rows: list,
     ranking_rows: list,
+    axis_rows: list,
     status_rows: list,
     title_basis_updates: list,
 ) -> int:
@@ -1233,12 +1257,14 @@ def _flush_detail_rows(
     connection.executemany(
         "INSERT INTO assessment_item_rankings VALUES (?,?,?,?,?,?)", ranking_rows
     )
+    connection.executemany("INSERT INTO assessment_item_axes VALUES (?,?,?)", axis_rows)
     connection.executemany("INSERT INTO case_detail_status VALUES (?,?,?,?)", status_rows)
     connection.executemany(
         "UPDATE cases SET title_basis = ? WHERE case_id = ?", title_basis_updates
     )
     item_rows.clear()
     ranking_rows.clear()
+    axis_rows.clear()
     status_rows.clear()
     title_basis_updates.clear()
     return written
@@ -1252,6 +1278,7 @@ def _parse_one_case(
     source_format: str,
     item_rows: list,
     ranking_rows: list,
+    axis_rows: list,
     status_rows: list,
     title_basis_updates: list,
 ) -> None:
@@ -1291,7 +1318,9 @@ def _parse_one_case(
                 zlib.compress(item.rubric_html.encode("utf-8")),
             )
         )
-        category, topic, ambiguous, signals = item_category_and_signals(item)
+        category, topic, ambiguous, signals, methods, topics = item_category_and_signals(
+            item
+        )
         ranking_rows.append(
             (
                 item_id,
@@ -1302,6 +1331,8 @@ def _parse_one_case(
                 json.dumps(signals, ensure_ascii=False),
             )
         )
+        axis_rows.extend((item_id, "method", value) for value in methods)
+        axis_rows.extend((item_id, "topic", value) for value in topics)
         # Any bounded item confirms the case, not only the first one. The case's
         # own displayed fields come from ``refresh_cases_from_items``, which
         # reads the first *bounded* item regardless of position; requiring

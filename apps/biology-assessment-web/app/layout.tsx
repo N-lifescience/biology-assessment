@@ -41,12 +41,14 @@ export const metadata: Metadata = {
   },
 };
 
+// 번호는 둘러보는 순서를 알려주는 표시다. 처음 오는 교사가 경향을 먼저 보고
+// 유형을 좁힌 뒤 전체를 뒤지는 흐름이라, 메뉴 이름만으로는 그 순서가 안 보인다.
 const navigation = [
-  { href: "/trends", label: "공개자료 경향" },
-  { href: "/references", label: "유형별 설계 참고" },
-  { href: "/cases", label: "전체 라이브러리" },
-  { href: "/guide", label: "사용설명서" },
-  { href: "/sources", label: "자료 안내" },
+  { href: "/trends", label: "1. 공개자료 경향" },
+  { href: "/references", label: "2. 유형별 설계 참고" },
+  { href: "/cases", label: "3. 전체 라이브러리" },
+  { href: "/guide", label: "4. 사용설명서" },
+  { href: "/sources", label: "5. 자료 안내" },
 ];
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

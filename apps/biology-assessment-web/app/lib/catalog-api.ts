@@ -98,6 +98,7 @@ export type CuratedCaseListResponse = {
 export type ReferencePageResponse = CuratedCaseListResponse & {
   subjects: SubjectItem[];
   facets: FacetResponse;
+  offset: number;
 };
 
 export type CaseListResponse = {
