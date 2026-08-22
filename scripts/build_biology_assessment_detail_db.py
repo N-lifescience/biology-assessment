@@ -47,4 +47,11 @@ CREATE TABLE IF NOT EXISTS assessment_item_rankings (
     priority_score INTEGER NOT NULL,
     priority_signals_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS assessment_item_axes (
+    item_id TEXT NOT NULL,
+    axis TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (item_id, axis, value)
+) WITHOUT ROWID;
 """

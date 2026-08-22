@@ -109,7 +109,7 @@ export default function CaseDetailViewer({
         </div>
         <div className="sourceDetailActions">
           <button type="button" onClick={() => window.print()}>PDF로 저장·인쇄</button>
-          <a href={caseItem.source_url} target="_blank" rel="noreferrer">학교알리미 공개 페이지 ↗</a>
+          <a href={caseItem.source_url} target="_blank" rel="noreferrer">학교알리미 원문 보기 ↗</a>
         </div>
       </header>
 

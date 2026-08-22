@@ -34,7 +34,10 @@ MAX_BOUNDED_ITEMS = 12
 PIPE_SEPARATOR_RE = re.compile(r"\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*")
 BLOCK_END_RE = re.compile(
     r"(?:결시자|미응시자|학적\s*변동|성적\s*처리|이의\s*신청|평가\s*결과의\s*활용|"
-    r"교수\s*학습\s*운영\s*계획|성취도|성취기준별\s*성취수준|재응시|결과물\s*보존)"
+    r"교수\s*학습\s*운영\s*계획|성취도|성취기준별\s*성취수준|재응시|결과물\s*보존|"
+    # The section listing standards the school does *not* assess by exam or
+    # performance task ends the assessment block by definition.
+    r"평가하지\s*않는\s*성취기준)"
 )
 ITEM_PREFIX_RE = re.compile(
     r"^(?:#{1,6}\s*)?(?:"
@@ -69,7 +72,23 @@ AREA_TITLE_LABEL_RE = re.compile(r"^(?:평가영역(?:[1-9])?|수행평가영역
 # structure ("수행평가 영역별 세부기준") are worse titles than the cell.
 TASK_ACTIVITY_RE = re.compile(
     r"보고서|실험|발표|프로젝트|포트폴리오|제작|조사|탐구|논술|서술|설계|작성|만들기|"
-    r"분석|토론|글쓰기|캠페인|관찰|측정|모형|에세이|일지"
+    r"분석|토론|글쓰기|캠페인|관찰|측정|모형|에세이|일지|"
+    # A 영역명 written as a nominalised verb ("캘빈회로와 TCA회로 표현하기",
+    # "유전자발현 추론하기") names an activity whatever the verb is; a unit
+    # name in a 평가영역 cell never takes this form.
+    r"하기"
+)
+# A numbered heading that carries its own score ("가. 포트폴리오(50점)") is the
+# school naming a scored assessment area: a score is only ever written beside
+# the name of something that is graded, never beside a section label.  Under
+# such a heading the table's 수행과제 cell describes what the student does, so
+# the heading is the name and the cell is the overview.  Values below 5 are
+# excluded because "(1)" is source numbering, not a score -- the same
+# threshold :func:`_clean_heading_title` already uses to strip score suffixes.
+SCORED_AREA_HEADING_RE = re.compile(
+    r"^(?:#{1,6}\s*)?(?:[가-하]|\d{1,2}|[①-⑳])\s*[.)]\s*"
+    r"(?P<name>[^()（）]*[^\s()（）])\s*"
+    r"[(（]\s*(?:[5-9]|[1-9]\d|100)\s*(?:점|%)?\s*[)）]\s*$"
 )
 TITLE_VALUE_STOP_LABELS = {
     "영역만점",
@@ -276,6 +295,31 @@ class ParsedAssessmentItem:
     score: str
     weight: str
     standards: tuple[str, ...]
+
+
+def _already_read_under_a_heading(
+    items: list[ParsedAssessmentItem], candidate: ParsedAssessmentItem
+) -> bool:
+    """True when a scored-area heading already covers this table's source span.
+
+    Such a heading keeps the name and demotes the table's 수행과제 cell to the
+    overview, so the table scan later finds that sentence and offers it as a
+    separate assessment.  It is the same assessment, and the titles no longer
+    match, so the source span is what still identifies it.
+
+    Only headings that carry their own 배점 count.  Any wider rule swallowed
+    real assessments: an ordinary section heading can span several detail
+    tables, and each of those is its own assessment.
+    """
+
+    return any(
+        item.extraction_status == "bounded"
+        and item.title_basis == "heading"
+        and SCORED_AREA_HEADING_RE.match(item.title_raw)
+        and item.source_start <= candidate.source_start
+        and candidate.source_end <= item.source_end
+        for item in items
+    )
 
 
 @dataclass(frozen=True)
@@ -544,8 +588,13 @@ def _is_source_heading(line: str) -> bool:
     if re.match(r"^\s*[-*•▪]\s", line):
         return False
     shown = visible_text(line)
+    # The ``#`` marker is not by itself proof either: PDF-to-Markdown extraction
+    # promotes every wrapped 평가 방침 line to ``## …`` ("## 도에는 활용하되
+    # 수행평가 배점에는 포함되지 않도록 유의한다."), and such a line then
+    # anchored the whole block above the real 세부 기준 section.  A sentence
+    # ending is what still separates the two.
     if re.match(r"^\s*#{1,6}\s+", line):
-        return True
+        return not PROSE_SENTENCE_END_RE.search(shown)
     if not re.match(r"^\s*(?:\d{1,2}|[가-하])\s*[.)]\s*", shown):
         return False
     return not PROSE_SENTENCE_END_RE.search(shown)
@@ -794,6 +843,15 @@ def _clean_heading_title(raw: str) -> tuple[str, str]:
         ):
             title = candidate
     return strip_title_decoration(title), title_raw
+
+
+# A connective verb ending followed by a comma is the middle of a sentence.
+# PDF extraction wraps a 평가 방침 paragraph and marks each line as a heading,
+# so without this a policy clause is published as a task name ("가. 2022 개정
+# 교육과정 성취기준 및 성취수준을 바탕으로 실시하며, 수행평가에서 …").  It is
+# checked on headings only: a 수행과제 cell legitimately spells a long task out
+# as one sentence, and there the school did write that as the name.
+PROSE_CLAUSE_RE = re.compile(r"(?:하며|되며|이며|으며|하고자)\s*,")
 
 
 def _valid_title(title: str) -> bool:
@@ -1081,7 +1139,11 @@ def _heading_candidates(block: str) -> list[tuple[int, int, str, str]]:
         # never source headings, even though they may begin with "1." or "가.".
         if outside_table and not raw.lstrip().startswith("|"):
             title, title_raw = _clean_heading_title(raw)
-            if ITEM_PREFIX_RE.match(visible_text(raw)) and _valid_title(title):
+            if (
+                ITEM_PREFIX_RE.match(visible_text(raw))
+                and _valid_title(title)
+                and not PROSE_CLAUSE_RE.search(title)
+            ):
                 preliminary.append((index, start, title, title_raw))
         table_depth += opens - closes
         table_depth = max(0, table_depth)
@@ -2127,12 +2189,21 @@ def parse_assessment_section(
             # assessed as often as the task ("생명과학의 역사" under a section
             # headed "1. 수행평가 ( 1 ) - 탐구 실험 보고서").  A source heading
             # that names a task outranks that cell.
+            # …and except under a heading that carries its own 배점, which is
+            # the school's own name for the scored area ("나. 생명과학 연구사례
+            # 탐구(20점)").  There the 수행과제 cell holds a sentence describing
+            # the work, which belongs in the overview, not in the name.
             if (
                 table_title
-                and AREA_TITLE_LABEL_RE.fullmatch(table_label)
                 and not structural_heading
-                and TASK_ACTIVITY_RE.search(title)
                 and _valid_plan_title(title)
+                and (
+                    (
+                        AREA_TITLE_LABEL_RE.fullmatch(table_label)
+                        and TASK_ACTIVITY_RE.search(title)
+                    )
+                    or SCORED_AREA_HEADING_RE.match(title_raw)
+                )
             ):
                 table_title = ""
             table_display_title = (
@@ -2192,21 +2263,15 @@ def parse_assessment_section(
             for item in items
             if item.extraction_status == "bounded"
         }
-        items.extend(
-            item for item in table_items if compact_text(item.title) not in existing_titles
-        )
-        existing_titles.update(compact_text(item.title) for item in table_items)
-        items.extend(
-            item for item in local_table_items if compact_text(item.title) not in existing_titles
-        )
-        existing_titles.update(compact_text(item.title) for item in local_table_items)
-        items.extend(
-            item for item in matrix_items if compact_text(item.title) not in existing_titles
-        )
-        existing_titles.update(compact_text(item.title) for item in matrix_items)
-        items.extend(
-            item for item in hinted_items if compact_text(item.title) not in existing_titles
-        )
+        for extras in (table_items, local_table_items, matrix_items, hinted_items):
+            accepted = [
+                item
+                for item in extras
+                if compact_text(item.title) not in existing_titles
+                and not _already_read_under_a_heading(items, item)
+            ]
+            items.extend(accepted)
+            existing_titles.update(compact_text(item.title) for item in extras)
         if not any(item.extraction_status == "bounded" for item in items):
             global_table_items = _expected_code_table_items(full_text, subject)
             items.extend(

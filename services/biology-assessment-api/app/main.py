@@ -39,10 +39,11 @@ CURATED_CATEGORY_PATTERN: Final = (
     "^(reasoning|measurement|experiment|problem|analysis"
     "|discussion|writing|production|process|inquiry)$"
 )
-# 같은 가이드북의 주제(내용) 축 16종.
+# 같은 가이드북의 주제(내용) 축 16종에, 다룰 내용을 학생이 정하는 과제를 모으는
+# free(자유 주제)를 더한 17종.
 CURATED_TOPIC_PATTERN: Final = (
     "^(motion|wave|electromagnetism|matter|reaction|cell|genetics|earth"
-    "|space|environment|history|nos|ethics|everyday|career|data)$"
+    "|space|environment|history|nos|ethics|everyday|career|data|free)$"
 )
 INTERPRETATION_CAUTION: Final = (
     "평가계획에서 과목이 발견되지 않았다는 사실은 학교가 과목을 개설하지 않았다는 뜻이 아닙니다."
@@ -301,7 +302,10 @@ def references(
     region: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     district: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     topic: Annotated[str | None, Query(pattern=CURATED_TOPIC_PATTERN)] = None,
-    limit: Annotated[int, Query(ge=1, le=30)] = 30,
+    limit: Annotated[int, Query(ge=1, le=50)] = 30,
+    # 한 조합의 사례는 수백 건이 되기도 한다. 상위 몇 건만 보여주면 그 아래가
+    # 있는지조차 알 수 없으므로 페이지 단위로 끝까지 넘겨볼 수 있게 한다.
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, object]:
     require_region_for_district(region, district)
     catalog = ready_detail_repository()
@@ -313,8 +317,10 @@ def references(
         category=category,
         topic=topic,
         limit=limit,
+        offset=offset,
     )
     return {
+        "offset": offset,
         "subjects": catalog.subjects(),
         "facets": catalog.curated_facets(
             curriculum=curriculum,

@@ -32,6 +32,8 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
         connection.execute("DELETE FROM case_detail_status WHERE case_id = ?", (case_id,))
         connection.execute("DELETE FROM assessment_item_rankings WHERE item_id IN "
                             "(SELECT item_id FROM assessment_items WHERE case_id = ?)", (case_id,))
+        connection.execute("DELETE FROM assessment_item_axes WHERE item_id IN "
+                            "(SELECT item_id FROM assessment_items WHERE case_id = ?)", (case_id,))
         connection.execute("DELETE FROM assessment_items WHERE case_id = ?", (case_id,))
         connection.execute(
             "INSERT INTO case_detail_status VALUES (?, ?, ?, ?)",
@@ -93,6 +95,11 @@ def test_detail_endpoints_return_the_source_bounded_item(tmp_path, monkeypatch) 
             # (item_id, category=방법 축, topic=주제 축, ambiguous, score, signals)
             "INSERT INTO assessment_item_rankings VALUES (?, 'inquiry', 'cell', 0, 68, ?)",
             (item_id, json.dumps(["채점기준 원문 확인"], ensure_ascii=False)),
+        )
+        # 유형별 참고는 항목이 실제로 가진 축들(assessment_item_axes)로 거른다.
+        connection.executemany(
+            "INSERT INTO assessment_item_axes VALUES (?,?,?)",
+            [(item_id, "method", "inquiry"), (item_id, "topic", "cell")],
         )
 
     monkeypatch.setattr(main, "catalog_database_path", lambda: database)
@@ -165,6 +172,68 @@ def test_bundle_review_item_does_not_publish_source_html(tmp_path, monkeypatch) 
     response = TestClient(app).get(f"/api/v1/assessment-items/{item_id}")
 
     assert response.status_code == 404
+
+
+def test_curated_filter_finds_an_item_under_every_axis_it_carries(
+    tmp_path, monkeypatch
+) -> None:
+    """A 영역명 that is honestly two methods must appear under both tabs.
+
+    「탐구 실험 보고서」 is 실험평가 and 작성 at once. Before the axes table the
+    filter compared one stored value, so whichever the classifier happened to
+    rank first hid the item from the other tab.
+    """
+
+    database = tmp_path / "axes.sqlite"
+    shutil.copyfile(settings.DEFAULT_DATABASE, database)
+    with sqlite3.connect(database) as connection:
+        item_id, region = connection.execute(
+            """
+            SELECT item.item_id, cases.region
+            FROM assessment_items item
+            JOIN assessment_item_rankings ranking ON ranking.item_id = item.item_id
+            JOIN cases ON cases.case_id = item.case_id
+            WHERE item.extraction_status = 'bounded'
+              AND item.title_basis IN ('table', 'heading')
+              AND ranking.priority_score >= 38 AND cases.region != ''
+            LIMIT 1
+            """
+        ).fetchone()
+        connection.executescript(SCHEMA_SQL)
+        # This one item is the whole axis table, so each assertion below reads
+        # the filter itself instead of racing thousands of real items for a
+        # place inside the page limit.
+        connection.execute("DELETE FROM assessment_item_axes")
+        connection.executemany(
+            "INSERT INTO assessment_item_axes VALUES (?,?,?)",
+            [
+                (item_id, "method", "experiment"),
+                (item_id, "method", "writing"),
+                (item_id, "topic", "free"),
+            ],
+        )
+
+    monkeypatch.setattr(main, "detail_catalog_database_path", lambda: database)
+    client = TestClient(app)
+
+    for category in ("experiment", "writing"):
+        payload = client.get(
+            "/api/v1/curated",
+            params={"category": category, "region": region, "limit": 30},
+        ).json()
+        assert [value["item_id"] for value in payload["items"]] == [item_id], category
+
+    free = client.get(
+        "/api/v1/curated",
+        params={"category": "writing", "topic": "free", "region": region, "limit": 30},
+    ).json()
+    assert [value["item_id"] for value in free["items"]] == [item_id]
+
+    other = client.get(
+        "/api/v1/curated",
+        params={"category": "discussion", "region": region, "limit": 30},
+    ).json()
+    assert all(value["item_id"] != item_id for value in other["items"])
 
 
 def test_bounded_release_privacy_gate_rejects_high_risk_identifier(tmp_path) -> None:

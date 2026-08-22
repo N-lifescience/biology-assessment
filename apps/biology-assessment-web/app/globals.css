@@ -646,7 +646,10 @@ a { color: inherit; }
 .sectionTopline > div { display: flex; align-items: flex-start; gap: 0.7rem; }
 .sectionTopline h2 { margin: 0; font-size: 1.2rem; letter-spacing: -0.035em; }
 .sectionTopline p { margin: 0.22rem 0 0; color: var(--muted); font-size: 0.76rem; }
-.categoryTabs { margin-top: 1rem; display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid #bdcbc3; }
+/* 주제 선택은 위쪽 필터 패널과 같은 컨트롤이라 .filterControls 스타일을 그대로
+   쓰고, 폭만 한 칸으로 줄인다. 방법 탭 바로 위에 놓이므로 여백도 좁힌다. */
+.topicFilterRow { margin-top: 1rem; grid-template-columns: minmax(0, 340px); }
+.categoryTabs { margin-top: 0.8rem; display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid #bdcbc3; }
 .categoryTabs button { min-height: 44px; padding: 0.55rem; border: 0; border-right: 1px solid #d5ddd8; color: var(--muted); background: white; font: inherit; font-size: 0.75rem; font-weight: 900; cursor: pointer; }
 .categoryTabs button:last-child { border-right: 0; }
 .categoryTabs button.selected { color: white; background: var(--forest); }

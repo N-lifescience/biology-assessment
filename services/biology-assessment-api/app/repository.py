@@ -149,6 +149,24 @@ class CatalogRepository:
         return connection
 
     @staticmethod
+    def _has_axes(connection: sqlite3.Connection) -> bool:
+        """True when this database recorded every axis value per item.
+
+        The table has to be non-empty, not merely present: an empty one would
+        make the membership filter match nothing and blank the whole site,
+        where falling back to the single stored value still answers.
+        """
+
+        if connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table'"
+            " AND name = 'assessment_item_axes'"
+        ).fetchone() is None:
+            return False
+        return connection.execute(
+            "SELECT 1 FROM assessment_item_axes LIMIT 1"
+        ).fetchone() is not None
+
+    @staticmethod
     def _curated_filters(
         *,
         category: str,
@@ -157,19 +175,27 @@ class CatalogRepository:
         region: str | None = None,
         district: str | None = None,
         topic: str | None = None,
+        multi_axis: bool = False,
     ) -> tuple[list[str], list[object]]:
         # ``category`` is the 방법 axis; ``topic`` narrows the 주제 axis of the
-        # same 영역명 matrix, so passing both asks for one matrix cell.
+        # same 영역명 matrix, so passing both asks for one matrix cell.  An item
+        # can honestly sit in several cells ("탐구 실험 보고서" is 실험평가 and
+        # 작성), so where the build recorded every axis value the filter matches
+        # membership rather than the single displayed value.
+        axis_clause = (
+            "EXISTS (SELECT 1 FROM assessment_item_axes axes"
+            " WHERE axes.item_id = item.item_id AND axes.axis = ? AND axes.value = ?)"
+        )
         clauses = [
-            "ranking.category = ?",
+            axis_clause if multi_axis else "ranking.category = ?",
             "ranking.priority_score >= 38",
             "item.extraction_status = 'bounded'",
             "item.title_basis IN ('table', 'heading')",
         ]
-        parameters: list[object] = [category]
+        parameters: list[object] = ["method", category] if multi_axis else [category]
         if topic:
-            clauses.append("ranking.topic = ?")
-            parameters.append(topic)
+            clauses.append(axis_clause if multi_axis else "ranking.topic = ?")
+            parameters.extend(["topic", topic] if multi_axis else [topic])
         for column, value in (
             ("curriculum", curriculum),
             ("subject", subject),
@@ -551,6 +577,7 @@ class CatalogRepository:
         category: str,
         limit: int,
         topic: str | None = None,
+        offset: int = 0,
     ) -> list[dict[str, object]]:
         with self.connect() as connection:
             has_rankings = connection.execute(
@@ -580,6 +607,7 @@ class CatalogRepository:
                     region=region,
                     district=district,
                     topic=topic if has_topic else None,
+                    multi_axis=self._has_axes(connection),
                 )
                 district_select = "cases.district" if has_district else "'' AS district"
                 topic_select = "ranking.topic" if has_topic else "'' AS topic"
@@ -594,9 +622,9 @@ class CatalogRepository:
                     JOIN cases ON cases.case_id = item.case_id
                     WHERE {" AND ".join(clauses)}
                     ORDER BY ranking.priority_score DESC, item.item_id
-                    LIMIT ?
+                    LIMIT ? OFFSET ?
                     """,
-                    [*parameters, limit],
+                    [*parameters, limit, offset],
                 ).fetchall()
             else:
                 rows = []
@@ -630,7 +658,7 @@ class CatalogRepository:
             region=region,
             district=district,
             category=category,
-            limit=limit,
+            limit=limit + offset,
         )
         return [
             {
@@ -657,7 +685,7 @@ class CatalogRepository:
                 "priority_score": int(item["priority_score"]),
                 "priority_signals": list(item["priority_signals"]),
             }
-            for item in legacy
+            for item in legacy[offset:]
         ]
 
     def curated_total(
@@ -686,6 +714,7 @@ class CatalogRepository:
                 region=region,
                 district=district,
                 topic=topic if has_topic else None,
+                multi_axis=self._has_axes(connection),
             )
             row = connection.execute(
                 f"""
@@ -707,23 +736,24 @@ class CatalogRepository:
         region: str | None,
         category: str,
     ) -> dict[str, list[dict[str, object]]]:
-        clauses, parameters = self._curated_filters(
-            category=category,
-            curriculum=curriculum,
-            subject=subject,
-        )
-        where_sql = " AND ".join(clauses)
-        district_clauses = [*clauses]
-        district_parameters = [*parameters]
-        if region:
-            district_clauses.append("cases.region = ?")
-            district_parameters.append(region)
         joins = """
             FROM assessment_items item
             JOIN assessment_item_rankings ranking ON ranking.item_id = item.item_id
             JOIN cases ON cases.case_id = item.case_id
         """
         with self.connect() as connection:
+            clauses, parameters = self._curated_filters(
+                category=category,
+                curriculum=curriculum,
+                subject=subject,
+                multi_axis=self._has_axes(connection),
+            )
+            where_sql = " AND ".join(clauses)
+            district_clauses = [*clauses]
+            district_parameters = [*parameters]
+            if region:
+                district_clauses.append("cases.region = ?")
+                district_parameters.append(region)
             region_rows = connection.execute(
                 f"""
                 SELECT cases.region AS value, COUNT(*) AS count

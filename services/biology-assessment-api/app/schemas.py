@@ -187,6 +187,7 @@ class ReferencePageResponse(StrictModel):
     topic: str = ""
     items: list[CuratedAssessmentItem]
     total: int
+    offset: int = 0
     interpretation: str
 
 
