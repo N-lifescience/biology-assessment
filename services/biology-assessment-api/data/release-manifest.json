@@ -1,12 +1,8 @@
 {
   "files": [
     {
-      "name": "biology_assessment_catalog.sqlite",
-      "sha256": "3eb54f8eacfbbc36e180c646f3b1a5d77c516abd38b6ae0d0068cf8f8f5cea72"
-    },
-    {
       "name": "biology_assessment_catalog_detail.sqlite",
-      "sha256": "3eb54f8eacfbbc36e180c646f3b1a5d77c516abd38b6ae0d0068cf8f8f5cea72"
+      "sha256": "a09e296ae89e47691634389f890c8343de80fbe5dab9975ca0d98868bfeed2c0"
     }
   ]
 }
