@@ -461,8 +461,15 @@ COMPACT_REJECT_SET = {
 
 
 def task_name_is_rejected(text: str) -> bool:
+    # 항목 단위 파서와 같은 판정을 쓴다. 케이스 이름은 bounded 항목이 없을 때
+    # 이 경로로만 정해지므로, 두 곳이 따로 규칙을 들고 있으면 항목에서 걸러낸
+    # 방침 문장이 케이스 제목으로 그대로 올라온다.
+    from scripts.biology_assessment_detail_parser import heading_is_policy_prose
+
     stripped = re.sub(r"\s+", " ", text).strip()
     if not stripped:
+        return True
+    if heading_is_policy_prose(stripped):
         return True
     compact = compact_text(stripped)
     if compact in COMPACT_REJECT_SET:
@@ -955,7 +962,11 @@ def load_cases(
             task_names, _, sources = derive_task_names(evidence_text, [], subject)
 
         structure = assessment_structure(evidence_text, task_names[0] if task_names else "", sources)
-        summary_overview = structure["overview"] or evidence_text[:600]
+        # 개요를 못 찾으면 비워 둔다. 예전에는 원문 앞 600자를 그대로 넣었는데,
+        # 그 자리에는 문서 머리말("2026학년도 1학기 교수학습 및 평가 운영 계획 #
+        # ( 3 ) 학년"), 표 조각, 범교과 안전교육 행이 들어와 개요라며 노출됐다.
+        # 빈 개요는 화면이 이미 처리한다.
+        summary_overview = structure["overview"]
 
         rows.append(
             (

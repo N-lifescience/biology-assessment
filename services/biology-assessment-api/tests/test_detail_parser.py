@@ -16,7 +16,9 @@
 
 import pytest
 from scripts.biology_assessment_detail_parser import (
+    _field_value_is_usable,
     balance_table_tags,
+    biology_standard_codes,
     heading_title_is_structural,
     markdown_fragment_to_html,
     normalize_checkbox_glyphs,
@@ -34,6 +36,54 @@ def test_subject_code_alignment_does_not_confuse_math_one_and_two() -> None:
     assert segment_subject_alignment(math_two, "생명과학Ⅱ") == "expected"
     assert segment_subject_alignment(math_one, "생명과학Ⅰ") == "expected"
     assert segment_subject_alignment(math_one, "생명과학Ⅱ") == "other"
+
+
+@pytest.mark.parametrize(
+    ("code", "subject"),
+    [
+        # 전문교과·중학교 코드는 앞자리 학년 숫자가 없거나 한 자리라, 예전
+        # "10|12로 시작하는 코드"만 보던 규칙에는 코드로 잡히지도 않았다.
+        ("[프로02-01]", "생명과학Ⅱ"),
+        ("[자구01-02]", "생명과학Ⅱ"),
+        ("[알설04-01]", "생명과학Ⅱ"),
+        ("[9음03-01]", "통합과학1"),
+        ("[일물I21-01]", "생명과학실험"),
+        ("[11지능01-02]", "생명과학Ⅱ"),
+    ],
+)
+def test_other_subject_code_marks_the_segment_as_another_subject(
+    code: str, subject: str
+) -> None:
+    segment = f"<table><tr><td>{code} 프로그램을 구현할 수 있다</td></tr></table>"
+
+    assert segment_subject_alignment(segment, subject) == "other"
+
+
+@pytest.mark.parametrize(
+    ("code", "subject"),
+    [
+        # 학교가 자리 순서를 바꿔 적은 생명과학 교과군 코드는 그대로 남는다.
+        ("[12고생01-01]", "고급생명과학"),
+        ("[고생1201-01]", "고급생명과학"),
+        ("[10통과1-03-05]", "통합과학1"),
+        ("[통과1-03-05]", "통합과학1"),
+        ("[12생과Ⅱ01-01]", "생명과학Ⅱ"),
+        ("[12생실01-01]", "생명과학실험"),
+    ],
+)
+def test_biology_group_codes_are_not_read_as_another_subject(
+    code: str, subject: str
+) -> None:
+    segment = f"<table><tr><td>{code} 세포를 관찰할 수 있다</td></tr></table>"
+
+    assert segment_subject_alignment(segment, subject) != "other"
+
+
+def test_score_labels_shaped_like_codes_are_not_subject_evidence() -> None:
+    # "[기본점수 - 4]"는 배점 표기지 성취기준 코드가 아니다.
+    segment = "<table><tr><td>[기본점수 - 4]</td><td>[영역2-1]</td></tr></table>"
+
+    assert segment_subject_alignment(segment, "생명과학Ⅱ") == "unknown"
 
 
 def test_combined_plan_uses_exact_short_course_heading_boundary() -> None:
@@ -580,10 +630,87 @@ def test_structural_subheading_is_not_published_as_an_assessment_name() -> None:
         "평가(정기시험 및 수행평가)의 영역, 요소, 방법, 시기, 횟수, 반영비율",
         "성취기준을 분석하여 적합한 평가 요소를 도출하고 성취수준을 판별",
         "학생의 수업 시간 활동 및 내용을 작성하여 기록",
+        # 종결어미로 끝나는 채점 서술문 -- 문장이지 과제명이 아니다.
+        "대사성 질환 예방을 위한 방법을 포함한 상관관계 분석 보고서를 작성함.",
+        "논제에 대한 본인의 주장과 근거를 제시하여 토론을 준비함.",
+        "과학적 근거를 바탕으로 실험을 설계하고 결과를 추론할 수 있는 역량을 평가함.",
+        (
+            "평가는 크게 정기시험과 수행평가로 나뉘며 평가방법, 내용, 횟수, 시기 등 "
+            "세부사항은 다음과 같다."
+        ),
+        "위 기준을 위반할 경우 평가에서 감점 또는 재제출 조치가 이루어질 수 있다.",
+        "평가 실시 후 성적 결과를 기준으로 분할점수를 임의로 설정하면 안 됨.",
+        # 셀 너비에서 잘린 방침 문단 -- 조사·연결어미로 끝난다.
+        (
+            "수행평가의 결과물은 학생의 이의 신청, 처리, 확인 과정등의 적절한 조치가 "
+            "완료된 후 당해연도에"
+        ),
+        "수행평가 시행 전 안내된 부정행위 유형에 해당하는 경우, 해당 수행평가 영역의",
+        "복수의 학생이 공동으로 수행하는 모둠활동 등을 평가할 때에는 개별 학생에게 역할을 부여하고",
+        # 평가 운영 어휘로만 된 문서 구조 라벨.
+        "평가 요소",
+        "배점 합계",
+        "세부 기준안",
+        "수행평가 채점 기준",
+        "수행평가 영역별 배점 및 채점 기준",
+        "1학기 수행평가 영역 및 평가항목, 배점 및 채점기준",
+        "평가 항목 (채점 기준)",
+        "1회(기말고사)",
+        "정기시험 1회",
+        # 성적 처리 규정.
+        "정기시험 및 수행평가의 이의신청 기간 및 절차",
+        "인정점 부여 시 기준고사/영역 설정",
+        "동점자 처리 1순위",
+        "자발적 미응시/미제출",
+        # 대단원이 둘 이상 나열된 평가 범위 표기.
+        "Ⅰ. 생명과학의 역사 Ⅱ. 세포의 특성 Ⅳ. 유전자의 발현과 조절",
+        "Ⅰ.생명의 시스템 ~ Ⅲ.생명의 다양성과 연속성",
+        # 무엇을 평가하는지 쓴 채점 서술.
+        (
+            "보고서 설계, 데이터 수집, 자료 해석 및 결론 도출 등을 활용하여 융합적 "
+            "사고력, 협력적 문제 발견 및 해결 능력, 의사소통 능력을 평가"
+        ),
+        "실험을 수행하고 실험 보고서를 작성한 내용을 평가",
+        # 학교알리미 서식의 표준 문구가 여러 학교에서 반복 추출된다.
+        "수행평가 영역별 기준 성취율",
+        "영역별 평가 개요",
+        "영역별 기본 점수",
+        "수행평가 영역별 분할점수 기준",
+        "수행평가 세부사항",
     ],
 )
 def test_policy_and_standard_headings_are_structural(title: str) -> None:
     assert heading_title_is_structural(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # 활동어를 가진 실제 과제명은 평가 운영 어휘가 섞여도 살아남는다.
+        "효모의 물질대사 탐구 (동점자 1순위)",
+        "생명과학II의 과학적 개념 및 형성평가 문항 풀이하고 기록하기",
+        (
+            "수업 시간 내 학습한 핵심 개념을 바탕으로 정기적인 퀴즈 및 형성평가 문항을 "
+            "해결하여 학습 목표 도달 확인하기"
+        ),
+        # 조사와 겹치는 끝 글자를 가진 명사구 제목.
+        "스펙트럼 분석을 통한 별의 일생과 원소의 생성 과정 탐구보고서",
+        "천연 항생물질 탐색 및 항생 활성화 비교 실험 보고서",
+        "생명과학과 에너지 : 세포호흡과 광합성 유전자 발현 조절 프로젝트 과제 발표 보고서",
+        "표준화되지 않은 생활 속 단위 조사 및 표준화 방안 토의",
+        # 평가 어휘가 아닌 내용어를 가진 짧은 제목.
+        "생명 시스템의 화학 반응 조절과 과학적 탐구 보고서",
+        "유전 정보의 흐름 탐구",
+        "삼투 현상 탐구 보고서",
+        # 대단원 하나를 앞에 붙여 쓴 실제 과제명은 범위 표기가 아니다.
+        (
+            "Ⅰ. 과학의 본성과 역사 속의 과학 탐구 / "
+            "01.과학사에서 동시 발견으로 이룬 과학 발전 추적하기"
+        ),
+    ],
+)
+def test_real_task_names_survive_the_policy_prose_filter(title: str) -> None:
+    assert not heading_title_is_structural(title)
 
 
 @pytest.mark.parametrize(
@@ -1240,3 +1367,78 @@ def test_column_header_summary_table_still_lists_each_row() -> None:
 
     assert "효소 탐구 보고서" in titles
     assert "광합성 색소 분리 실험" in titles
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[12생과Ⅱ01-01] 세포를 관찰한다", ["[12생과Ⅱ01-01]"]),
+        ("[10통과1-03-05] 시스템과 상호작용", ["[10통과1-03-05]"]),
+        ("[12생실01-01]와 [12고생04-04]", ["[12생실01-01]", "[12고생04-04]"]),
+        # 물결표는 코드가 아니라 범위 표기가 깨진 것이다.
+        ("[12생과02~02] 과학 신문 만들기", []),
+        # 영역 번호까지만 있는 값은 성취기준이 아니다.
+        ("[10통과1-01] 창의적인 원소 카드 만들기", []),
+        # 12로 시작해도 다른 교과 코드는 이 교과군의 성취기준이 아니다.
+        ("[12보05-03] 성문제에 대한 논술 및 발표", []),
+        ("[프로02-01] 변수의 개념을 이해한다", []),
+    ],
+)
+def test_only_this_subject_groups_achievement_codes_are_collected(
+    text: str, expected: list[str]
+) -> None:
+    assert biology_standard_codes(text) == expected
+
+
+def test_score_and_weight_reject_a_header_row_without_numbers() -> None:
+    source = """
+    # 생명과학Ⅱ
+    ## 수행평가 세부 계획
+    가. 광합성 색소 분리 탐구
+    <table>
+      <tr><th>성취기준</th><td>[12생과Ⅱ03-01]</td></tr>
+      <tr><th>만점</th><td>등급</td><td>평가 척도</td><td>배점</td></tr>
+      <tr><th>평가방법</th><td>실험</td></tr>
+    </table>
+    """
+
+    item = parse_assessment_section(source, "생명과학Ⅱ").items[0]
+
+    assert item.score == ""
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "usable"),
+    [
+        # 평가 시기 칸에 다른 칸의 라벨이 섞이면 표 행이 통째로 들어온 것이다.
+        ("timing", "단원명 · Ⅰ. 과학의 기초 Ⅱ. 물질과 규칙성 · 평가영역", False),
+        ("timing", "4월 반영비율(%) 25% 만점 50점", False),
+        ("timing", "4월 1주~4월 2주", True),
+        # 점수·비율 칸에 숫자가 없으면 값이 아니라 표 머리글이다.
+        ("score", "등급 · 평가 척도 · 배점", False),
+        ("score", "50점", True),
+        ("weight", "반영비율", False),
+        ("weight", "30%", True),
+    ],
+)
+def test_leaked_table_rows_are_not_published_as_field_values(
+    key: str, value: str, usable: bool
+) -> None:
+    assert _field_value_is_usable(key, value) is usable
+
+
+def test_timing_keeps_a_real_schedule_value() -> None:
+    source = """
+    # 통합과학1
+    ## 수행평가 세부 계획
+    가. 자연의 구성 원소 탐구
+    <table>
+      <tr><th>성취기준</th><td>[10통과1-02-01]</td></tr>
+      <tr><th>평가시기</th><td>4월 1주~4월 2주</td></tr>
+      <tr><th>평가방법</th><td>보고서</td></tr>
+    </table>
+    """
+
+    item = parse_assessment_section(source, "통합과학1").items[0]
+
+    assert item.timing == "4월 1주~4월 2주"

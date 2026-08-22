@@ -181,7 +181,10 @@ def catalog_database_path() -> Path:
             if DEFAULT_DETAIL_DATABASE.is_file()
             else DEFAULT_DATABASE
             if DEFAULT_DATABASE.is_file()
-            else materialized_packaged_database(detail=False)
+            # 배포 패키지는 detail 한 벌만 싣는다. 두 파일은 같은 빌드를 복사한
+            # 것이라 내용이 완전히 같았고, 둘 다 실으면 번들이 두 배가 됐다.
+            # ``detail=False`` 경로는 예전 패키지를 읽는 롤백용으로 남아 있다.
+            else materialized_packaged_database(detail=True)
         )
     path = Path(configured)
     return path if path.is_absolute() else PROJECT_ROOT / path

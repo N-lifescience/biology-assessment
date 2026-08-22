@@ -34,7 +34,9 @@ def test_catalog_archive_is_materialized_to_temporary_storage(
     monkeypatch.setattr(settings, "PACKAGED_DATABASE_ARCHIVE", archive)
     monkeypatch.setattr(settings.tempfile, "tempdir", str(runtime_directory))
 
-    materialized = settings.catalog_database_path()
+    # 배포는 detail 패키지 한 벌만 싣는다. catalog 패키지를 읽는 이 경로는
+    # 예전 배포로 되돌릴 때만 쓰이므로 직접 부른다.
+    materialized = settings.materialized_packaged_database(detail=False)
 
     assert materialized.parent == runtime_directory
     assert materialized.name.startswith("suhaeng-biology-catalog-")
@@ -71,7 +73,7 @@ def test_binary_gzip_parts_are_materialized_without_base64(
     monkeypatch.setattr(settings, "PACKAGED_DATA", data_directory)
     monkeypatch.setattr(settings.tempfile, "tempdir", str(runtime_directory))
 
-    materialized = settings.catalog_database_path()
+    materialized = settings.materialized_packaged_database(detail=False)
 
     with sqlite3.connect(materialized) as connection:
         assert connection.execute("SELECT value FROM marker").fetchone()[0] == "binary-ready"
@@ -197,3 +199,41 @@ def test_missing_manifest_identity_hashes_archive_contents(tmp_path, monkeypatch
     assert "unknown" not in materialized.name
     with sqlite3.connect(materialized) as connection:
         assert connection.execute("SELECT value FROM marker").fetchone()[0] == "content-addressed"
+
+
+def test_catalog_falls_back_to_the_detail_package_when_only_it_is_deployed(
+    tmp_path, monkeypatch
+) -> None:
+    """배포 패키지는 detail 한 벌뿐이다. catalog 조회도 그 한 벌을 읽어야 한다."""
+
+    source = tmp_path / "detail-source.sqlite"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE marker (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO marker VALUES ('detail-only')")
+    data_directory = tmp_path / "data"
+    data_directory.mkdir()
+    (data_directory / "detail.sqlite.gz").write_bytes(
+        gzip.compress(source.read_bytes(), compresslevel=9, mtime=0)
+    )
+    runtime_directory = tmp_path / "runtime"
+    runtime_directory.mkdir()
+
+    monkeypatch.setattr(settings, "DEFAULT_DETAIL_DATABASE", tmp_path / "missing-detail.sqlite")
+    monkeypatch.setattr(settings, "DEFAULT_DATABASE", tmp_path / "missing-default.sqlite")
+    # catalog 패키지는 어디에도 없다 -- 이것이 배포 후의 실제 상태다.
+    monkeypatch.setattr(settings, "PACKAGED_DATABASE", tmp_path / "missing-package.sqlite")
+    monkeypatch.setattr(settings, "PACKAGED_DATABASE_GZIP", tmp_path / "missing.sqlite.gz")
+    monkeypatch.setattr(settings, "PACKAGED_DATABASE_GZIP_PATTERN", "missing.gz.part-*")
+    monkeypatch.setattr(settings, "PACKAGED_DATABASE_ARCHIVE", tmp_path / "missing.b64")
+    monkeypatch.setattr(settings, "PACKAGED_DATABASE_ARCHIVE_PATTERN", "missing.b64.part-*")
+    monkeypatch.setattr(settings, "PACKAGED_DETAIL_DATABASE", tmp_path / "missing.sqlite")
+    monkeypatch.setattr(
+        settings, "PACKAGED_DETAIL_DATABASE_GZIP", data_directory / "detail.sqlite.gz"
+    )
+    monkeypatch.setattr(settings, "PACKAGED_DATA", data_directory)
+    monkeypatch.setattr(settings.tempfile, "tempdir", str(runtime_directory))
+
+    materialized = settings.catalog_database_path()
+
+    with sqlite3.connect(materialized) as connection:
+        assert connection.execute("SELECT value FROM marker").fetchone()[0] == "detail-only"

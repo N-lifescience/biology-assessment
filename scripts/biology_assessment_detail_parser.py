@@ -651,7 +651,10 @@ def _introduces_assessment_detail_table(
     if not _is_source_heading(raw):
         return False
     title = _clean_heading_title(visible_text(raw))[0]
-    if not title or heading_title_is_structural(title):
+    # 여기서 찾는 것은 과제명이 아니라 세부 계획 구간의 시작 헤딩이다. 그 헤딩은
+    # 원래 문서 구조 라벨이므로("평가 영역 및 반영 비율") 방침 문장 판정을 끄고
+    # 본다 -- 켜면 정상 앵커까지 사라져 케이스 전체가 unbounded 로 떨어진다.
+    if not title or heading_title_is_structural(title, policy_prose=False):
         return False
     table = _table_after_heading(lines, index)
     if not table:
@@ -817,6 +820,25 @@ def _clean_heading_title(raw: str) -> tuple[str, str]:
     )
     title = re.sub(r"^수행\s*평가\s*\d+\s*[:：]\s*", "", title)
     title = re.sub(r"^수행\s*평가\s*영역\s*\d+\s*[:：]\s*", "", title)
+    # "영역 : 삼투 현상 탐구 보고서", "B영역: …", "평가영역 4 : …" -- 라벨과 값이
+    # 한 줄로 합쳐진 헤딩이다. 라벨을 떼면 학교가 쓴 과제명이 그대로 남는다.
+    title = re.sub(
+        r"^(?:[A-Z]\s*)?(?:평가\s*)?영역\s*\d*\s*[:：]\s*(?=\S)", "", title
+    )
+    # "수행평가 세부기준 (1) 별의 진화와 원소의 생성 인포그래픽",
+    # "항목별 채점기준안 1) 수행평가명: 과제 연구" -- 구조 헤딩 뒤에 실제
+    # 과제명이 붙어 한 줄이 된 경우. 이름 부분만 남긴다.
+    title = re.sub(
+        r"^.*?(?:수행\s*평가|평가)\s*(?:과제)?명\s*[:：]\s*(?=\S)", "", title
+    )
+    title = re.sub(
+        r"^수행\s*평가\s*세부\s*(?:기준|계획|내용)\s*"
+        r"[(（]\s*\d{1,2}\s*[)）]\s*(?=\S)",
+        "",
+        title,
+    )
+    # 실제 과제명에 성적 처리 규정 표기가 따라붙은 경우("… 탐구 (동점자 1순위)").
+    title = re.sub(r"\s*[(（]\s*동점자\s*\d*\s*순위\s*[)）]\s*$", "", title)
     title = re.sub(r"^\d+\s*순위\s*\([^)]*반영\s*비율[^)]*\)\s*[:：]\s*", "", title)
     title = re.sub(r"^\[\s*(?:서[·ㆍ]?논술형|서술형|논술형)\s*\]\s*", "", title)
     title = re.sub(r"\s*\(\s*평가\s*시기\b.*$", "", title)
@@ -853,6 +875,74 @@ def _clean_heading_title(raw: str) -> tuple[str, str]:
 # as one sentence, and there the school did write that as the name.
 PROSE_CLAUSE_RE = re.compile(r"(?:하며|되며|이며|으며|하고자)\s*,")
 
+# 수행평가 과제명은 명사구다. 학교가 계획서에 적는 평가 방침·채점 지침·유의사항은
+# 완결된 서술문이고, PDF/HWP 추출이 그 문단의 줄들을 전부 헤딩으로 만들기 때문에
+# 과제명 자리에 올라온다. 어떤 문장이 오는지 하나씩 열거하는 대신 종결형 자체를
+# 본다 -- 종결어미로 끝나면 이름이 아니라 문장이다.
+SENTENCE_FINAL_HEADING_RE = re.compile(r"(?:다|음|함|됨|짐|것|바람)\s*[.。]?$")
+# 같은 문단이 셀 너비에서 잘리면 종결어미 대신 조사나 연결어미로 끝난다
+# ("… 조치가 완료된 후 당해연도에"). 과제명은 이런 형태로 끝나지 않는다.
+# 조사 한 글자가 실제 낱말의 끝 글자와 겹칠 수 있어(진로·교과·자료) 잘린 방침
+# 문단의 실제 길이인 20자 이상에서만 본다.
+# 와/과는 제외한다 -- 결과·효과·교과·성과처럼 명사의 끝 글자와 너무 자주 겹친다.
+# 의도 토의·논의·회의·합의·정의·협의로 끝나는 제목이 있어 그 앞 글자를 배제한다.
+TRUNCATED_CLAUSE_HEADING_RE = re.compile(
+    r"(?:은|는|을|를|(?<![토논회합정협주강])의|에|에서|으로|로|및|에게|부터|까지|"
+    r"하여|하고|하며|되어|되며|이며|으며|지만|면서)\s*$"
+)
+# 평가 운영 어휘로만 이루어진 헤딩은 문서 구조 라벨이다("평가 요소",
+# "수행평가 영역별 배점 및 채점 기준"). 활동어가 하나도 없고 이 어휘를 모두
+# 지웠을 때 남는 글자가 없으면 학교가 이름 붙인 과제가 아니다. 리터럴 목록을
+# 계속 늘리는 대신 어휘 자체를 본다.
+ADMIN_VOCABULARY_RE = re.compile(
+    r"수행평가|정기시험|지필평가|평가|채점|배점|점수|만점|합계|총점|비율|반영|"
+    r"영역|요소|항목|내용|방법|기준안|기준|세부|계획|안내|운영|시기|횟수|단원|개요|표|"
+    r"성취기준|성취수준|성취율|성취도|등급|학기|학년|과목|교과|문항|고사|중간|기말|"
+    r"공통|일반|기타|사항|구분|순위|기본|합계|합|별|등|회|차|[0-9]|"
+    r"[.,()（）\[\]/·ㆍ‧、:：;※'\"~\-–—및와과의는은이가을를에서로]"
+)
+# 평가 결과 처리 규정은 과제가 아니다. 활동어가 함께 있으면 실제 과제명에
+# 동점자 표기가 따라붙은 것뿐이므로(효모의 물질대사 탐구 (동점자 1순위))
+# 활동어가 없을 때만 규정으로 본다.
+GRADING_POLICY_VOCABULARY_RE = re.compile(
+    r"이의\s*신청|이의신청|인정점|결시|동점자|미응시|미제출|분할\s*점수|"
+    r"학적\s*변동|성적\s*처리|재평가|전입생|부정행위"
+)
+# 로마숫자 대단원이 둘 이상 나열되면 평가 범위이지 과제명이 아니다
+# ("Ⅰ. 생명과학의 역사 Ⅱ. 세포의 특성", "Ⅰ.생명의 시스템 ~ Ⅲ.생명의 다양성").
+# 대단원 하나로 시작하는 제목("Ⅰ. 과학의 본성 / 01.동시 발견 추적하기")은
+# 학교가 단원을 앞에 붙여 쓴 실제 과제명이라 건드리지 않는다.
+UNIT_RANGE_TITLE_RE = re.compile(r"[ⅠⅡⅢⅣⅤ]\s*[.．].*[ⅠⅡⅢⅣⅤ]\s*[.．]")
+# "… 의사소통 능력을 평가" -- 무엇을 평가하는지 쓴 채점 서술이다. 명사구 제목은
+# 목적격 조사 뒤에 '평가'로 끝나지 않는다.
+GRADED_ABILITY_TAIL_RE = re.compile(r"(?:을|를)\s*평가\s*\.?$")
+
+
+def heading_is_policy_prose(title: str) -> bool:
+    """Return true when a heading is a policy/rubric sentence, not a task name.
+
+    Every branch requires the heading to be long enough that a school could not
+    have meant it as a name: the shortest real 과제명 in the corpus that ends in
+    a nominalising ending ("탐구 일지 모음") stays well under these lengths.
+    """
+
+    clean = re.sub(r"\s+", " ", title).strip().strip(" ,，:：;；")
+    clean = re.sub(r"^(?:\d+|[가-하]|[①-⑳])\s*[.)]\s*", "", clean)
+    compact = compact_text(clean)
+    if len(compact) >= 12 and SENTENCE_FINAL_HEADING_RE.search(clean):
+        return True
+    if len(compact) >= 20 and TRUNCATED_CLAUSE_HEADING_RE.search(clean):
+        return True
+    if len(compact) >= 15 and GRADED_ABILITY_TAIL_RE.search(clean):
+        return True
+    if UNIT_RANGE_TITLE_RE.search(clean):
+        return True
+    if TASK_ACTIVITY_RE.search(clean):
+        return False
+    if GRADING_POLICY_VOCABULARY_RE.search(clean):
+        return True
+    return bool(compact) and not ADMIN_VOCABULARY_RE.sub("", compact).strip()
+
 
 def _valid_title(title: str) -> bool:
     compact = compact_text(title)
@@ -863,7 +953,7 @@ def _valid_title(title: str) -> bool:
     return not (len(compact) > 4 and bool(re.search(r"(?:상|중|하)\s*$", title)))
 
 
-def heading_title_is_structural(title: str) -> bool:
+def heading_title_is_structural(title: str, *, policy_prose: bool = True) -> bool:
     """Return true when a numbered heading describes document structure, not a task.
 
     These strings are common subheadings *inside* one assessment. Publishing
@@ -882,7 +972,8 @@ def heading_title_is_structural(title: str) -> bool:
     structural_clean = structural_clean.strip(" ,，:：;；.-")
     compact = compact_text(structural_clean)
     return bool(
-        compact in STRUCTURAL_EXACT_COMPACT
+        (policy_prose and heading_is_policy_prose(structural_clean))
+        or compact in STRUCTURAL_EXACT_COMPACT
         or STRUCTURAL_HEADING_RE.fullmatch(structural_clean)
         or re.match(
             r"^(?:교육과정\s*)?성취\s*기준\s*[:：]?\s*\[(?:10|12)",
@@ -970,6 +1061,47 @@ def heading_title_is_structural(title: str) -> bool:
     )
 
 
+# 생명과학 교과군 코드의 한글 뼈대만 남긴 집합("10통과1" -> "통과").  학교가 코드를
+# 자기 식으로 적어도("고생1201-01", "통과1-03-05") 뼈대는 그대로라, 학년 숫자 자리에
+# 기대지 않고 교과군 소속을 판별할 수 있다.
+BIOLOGY_CODE_CORES = frozenset(
+    re.sub(r"[^가-힣]", "", prefix)
+    for prefixes in EXPECTED_STANDARD_PREFIXES.values()
+    for prefix in prefixes
+)
+_BRACKET_CODE_RE = re.compile(r"\[\s*([^\[\]]{2,24})\s*-\s*\d")
+
+
+def foreign_subject_codes(shown: str) -> list[str]:
+    """Return achievement codes in ``shown`` that belong to another subject.
+
+    ``segment_subject_alignment`` used to look only for codes spelled ``10…``
+    or ``12…``, so a 전문교과 code (``[프로02-01]`` 정보, ``[자구01-02]``
+    자료구조) or a middle-school one (``[9음03-01]``) was not seen as a code at
+    all: the segment scored "unknown" and a whole other subject's assessment
+    was published inside a biology case.  A code is recognised by its shape --
+    a bracketed token carrying the subject's Hangul name and a two-digit area
+    number -- and then judged by that Hangul name, which is what actually
+    identifies the subject.  ``[기본점수 - 4]`` and ``[영역2-1]`` carry no
+    two-digit area number and are not codes.
+    """
+
+    foreign = []
+    for token in _BRACKET_CODE_RE.findall(shown):
+        code = subject_code_key(token)
+        if not re.search(r"[가-힣]", code) or not re.search(r"\d{2}", code):
+            continue
+        core = re.sub(r"[^가-힣]", "", code)
+        if any(
+            core.startswith(known) or known.startswith(core)
+            for known in BIOLOGY_CODE_CORES
+            if known
+        ):
+            continue
+        foreign.append(code)
+    return foreign
+
+
 def segment_subject_alignment(segment: str, subject: str) -> str:
     """Classify achievement-code evidence for a short-name subject boundary."""
 
@@ -977,6 +1109,10 @@ def segment_subject_alignment(segment: str, subject: str) -> str:
     if not prefixes:
         return "unknown"
     shown = unicodedata.normalize("NFC", visible_text(segment))
+    # 다른 교과의 코드는 그 자체로 경계가 깨졌다는 증거다. 생명과학 코드가 함께
+    # 있어도 마찬가지 -- 두 교과 표가 한 구간에 섞여 들어온 것이다.
+    if foreign_subject_codes(shown):
+        return "other"
     codes = [
         subject_code_key(match)
         for match in re.findall(r"\[\s*((?:10|12)[^\]\-]{1,20})\s*-\s*\d", shown)
@@ -1838,6 +1974,11 @@ def _valid_plan_title(value: str) -> bool:
     compact = compact_text(value)
     if not _valid_title(value):
         return False
+    # 표 셀에서 온 제목도 헤딩과 같은 판정을 받아야 한다. 아래 리터럴 목록만
+    # 두었을 때 "동점자 처리 1순위", "배점 및 만점", "장기 미인정 결시자"처럼
+    # 목록에 없는 라벨이 그대로 과제명으로 올라왔다.
+    if heading_is_policy_prose(value):
+        return False
     return not bool(
         len(compact) > 60
         or re.search(r"[.。]$", value.strip())
@@ -1906,6 +2047,69 @@ def _unique_values(values: list[str], limit: int = 8) -> list[str]:
     return output
 
 
+_STANDARD_CODE_SHAPE_RE = re.compile(r"\[\s*(\d{0,2}[가-힣][^\]]{0,22})\]")
+
+
+def biology_standard_codes(shown: str) -> list[str]:
+    """Return only the achievement codes that belong to this 교과군.
+
+    The old pattern took any bracket starting ``10``/``12``, so a 보건과 code
+    (``[12보05-03]``) counted as a biology standard while a code the school
+    spelled without the grade digits was missed.  A code has to carry a
+    ``NN-NN`` area/item number to be one at all -- ``[12생과02~02]`` is an
+    extraction artefact, ``[10통과1-01]`` names an area, not a standard -- and
+    its Hangul name has to be one of this 교과군's.
+    """
+
+    codes = []
+    for match in _STANDARD_CODE_SHAPE_RE.finditer(shown):
+        body = match.group(1)
+        if not re.search(r"\d{2}\s*-\s*\d{2}", body):
+            continue
+        core = re.sub(r"[^가-힣]", "", subject_code_key(body))
+        if not any(
+            core.startswith(known) or known.startswith(core)
+            for known in BIOLOGY_CODE_CORES
+            if known
+        ):
+            continue
+        codes.append(f"[{body.strip()}]")
+    return codes
+
+
+# 점수·배점·비율 칸은 숫자가 없으면 값이 아니라 표 머리글이다("등급 · 평가 척도 ·
+# 배점"). 시기 칸은 월·주 표기뿐이라, 다른 칸의 라벨이 섞여 있으면 표 행 전체가
+# 통째로 들어온 것이다("단원명 · Ⅰ. 과학의 기초 · 평가영역 · Ⅱ-1 자연의 구성원소").
+_FIELD_VALUE_MAX_LENGTH = {"timing": 40, "method": 120, "overview": 600}
+_LEAKED_ROW_IN_TIMING_RE = re.compile(
+    r"단원명|평가\s*영역|성취\s*기준|반영\s*비율|채점\s*기준|평가\s*요소|배점|만점"
+)
+
+
+def _field_value_is_usable(key: str, value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    if key in {"score", "weight"} and not re.search(r"\d", text):
+        return False
+    return not (key == "timing" and _LEAKED_ROW_IN_TIMING_RE.search(text))
+
+
+def _joined_field_value(key: str, values: list[str]) -> str:
+    """Join a field's cells, dropping the join when it grew into a whole row.
+
+    The length cap is applied after joining, not per cell: a 평가 시기 row that
+    leaked in arrives as several short cells ("단원명", "Ⅰ. 과학의 기초 …",
+    "평가영역"), each innocuous on its own.
+    """
+
+    joined = " · ".join(_unique_values(values, 4))
+    limit = _FIELD_VALUE_MAX_LENGTH.get(key)
+    if limit and len(compact_text(joined)) > limit:
+        return ""
+    return joined
+
+
 def _exact_fields(segment: str) -> dict[str, object]:
     found: dict[str, list[str]] = {key: [] for key in FIELD_LABELS}
     for rows in _source_tables(segment):
@@ -1944,10 +2148,11 @@ def _exact_fields(segment: str) -> dict[str, object]:
                                 continue
                             found[key].append(candidate)
                             break
-    standards = _unique_values(re.findall(r"\[(?:10|12)[^\]\s]{2,24}\]", visible_text(segment)), 24)
-    return {key: " · ".join(_unique_values(values, 4)) for key, values in found.items()} | {
-        "standards": standards
-    }
+    standards = _unique_values(biology_standard_codes(visible_text(segment)), 24)
+    return {
+        key: _joined_field_value(key, [v for v in values if _field_value_is_usable(key, v)])
+        for key, values in found.items()
+    } | {"standards": standards}
 
 
 class _SafeTableParser(StdlibHTMLParser):

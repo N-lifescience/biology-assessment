@@ -40,10 +40,11 @@ RELEASE_MANIFEST_NAME = "release-manifest.json"
 OFFICIAL_SOURCE_REGISTRY_NAME = "official_biology_source_registry.json"
 MAX_PART_BYTES = 40 * 1024 * 1024
 
-STAGED_DATABASES = (
-    "biology_assessment_catalog.sqlite",
-    "biology_assessment_catalog_detail.sqlite",
-)
+STAGED_DATABASES = ("biology_assessment_catalog_detail.sqlite",)
+# 예전에는 catalog 와 detail 을 둘 다 실었는데, 빌드가 detail 한 벌만 만들고
+# 복사하므로 두 파일은 바이트까지 같았다. 번들만 두 배가 됐다. 지난 배포가 남긴
+# catalog 패키지는 지운다 -- 두면 Vercel 이 계속 실어 나른다.
+RETIRED_PACKAGES = ("biology_assessment_catalog.sqlite",)
 
 
 def sha256_of(path: Path) -> str:
@@ -127,6 +128,21 @@ def stage(
             "Build the pipeline (scripts/run_final_biology_assessment_pipeline.py) first."
         )
 
+    for retired in RETIRED_PACKAGES:
+        removed = [
+            path
+            for path in (
+                [packaged_directory / f"{retired}.gz", packaged_directory / f"{retired}.gz.b64"]
+                + sorted(packaged_directory.glob(f"{retired}.gz.part-*"))
+                + sorted(packaged_directory.glob(f"{retired}.gz.b64.part-*"))
+            )
+            if path.is_file()
+        ]
+        for path in removed:
+            path.unlink()
+        if removed:
+            log(f"stage: removed retired {retired} package ({len(removed)} file(s))")
+
     files = []
     for name in STAGED_DATABASES:
         source = publish_directory / name
@@ -203,7 +219,15 @@ def self_check() -> None:
         assert not list(packaged.glob("*.part-*")), "stale parts survived a re-run"
         assert gzip.decompress(single[0].read_bytes()) == original
 
+        # A package retired from STAGED_DATABASES has to be deleted, or the
+        # deploy keeps carrying the copy this change exists to drop.
+        stale = packaged / f"{RETIRED_PACKAGES[0]}.gz"
+        stale.write_bytes(b"stale")
+        stale_part = packaged / f"{RETIRED_PACKAGES[0]}.gz.part-000"
+        stale_part.write_bytes(b"stale")
+
         manifest = stage(publish, packaged, max_part_bytes=4096, quiet=True)
+        assert not stale.exists() and not stale_part.exists(), "retired package survived staging"
         recorded = {entry["name"]: entry["sha256"] for entry in manifest["files"]}
         assert set(recorded) == set(STAGED_DATABASES), recorded
         assert recorded[catalog.name] == hashlib.sha256(original).hexdigest()

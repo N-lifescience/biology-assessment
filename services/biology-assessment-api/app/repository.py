@@ -71,7 +71,30 @@ def _plain_text(value: str) -> str:
     return parser.text()
 
 
-_SELECTED_BOX_RE = re.compile(r"[■☑☒✓✔]|□\s*[VvＶ]")
+_SELECTED_BOX_RE = re.compile(r"☑")
+# 학교마다 HWP 서식이 달라 체크 표시 글리프가 제각각이다. 실제 코퍼스에서 확인한
+# 것만 넣었다: 체크는 ■ ☑ ☒ ✓ ✔ ▣ √ ∨ þ 와 "(√)", "□V"; 빈칸은 □ ☐ ◻,
+# HWP 사용자 영역 문자 U+F000, "( )", 그리고 홀로 선 o(윙딩스 빈 상자).
+# 하나로 정규화한 뒤 판정한다 -- 글리프마다 분기하면 다음 서식에서 또 샌다.
+_CHECKED_GLYPHS = "■☑☒✓✔▣√∨þ✅⍌◼⟏▪●ü"
+_EMPTY_GLYPHS = "□☐◻"
+_PAREN_CHECKED_RE = re.compile(r"\(\s*[√Vv✓✔∨Oo]\s*\)")
+_PAREN_EMPTY_RE = re.compile(r"\(\s*\)")
+_BOX_WITH_TICK_RE = re.compile(rf"[{_EMPTY_GLYPHS}]\s*[VvＶ∨√ü✓]")
+_CHECKED_GLYPH_RE = re.compile(rf"[{_CHECKED_GLYPHS}]")
+_EMPTY_GLYPH_RE = re.compile(rf"[{_EMPTY_GLYPHS}]")
+_BARE_O_BOX_RE = re.compile(r"(?:(?<=\s)|^)[oO](?=\s*[가-힣])")
+
+
+def normalize_method_boxes(text: str) -> str:
+    """Rewrite every checkbox spelling in a 평가 방법 cell to ``☑``/``□``."""
+
+    text = _PAREN_CHECKED_RE.sub("☑", text)
+    text = _PAREN_EMPTY_RE.sub("□", text)
+    text = _BOX_WITH_TICK_RE.sub("☑", text)
+    text = _CHECKED_GLYPH_RE.sub("☑", text)
+    text = _EMPTY_GLYPH_RE.sub("□", text)
+    return _BARE_O_BOX_RE.sub("□", text)
 _METHOD_DROP_RE = re.compile(
     r"성취\s*기준|평가\s*기준|정기\s*시험|지필\s*평가|선택형|서답형|합계|"
     r"^\s*\[?(?:10|12)[^\]]*\]?\s*$"
@@ -91,17 +114,29 @@ def display_methods(values: list[str]) -> list[str]:
 
     output: list[str] = []
     for value in values:
-        text = re.sub(r"\s+", " ", _plain_text(str(value))).strip()
+        text = normalize_method_boxes(
+            re.sub(r"\s+", " ", _plain_text(str(value))).strip()
+        )
         if not text:
             continue
         parts = [text]
         if _SELECTED_BOX_RE.search(text):
             parts = [
                 segment.strip(" ·|")
-                for segment in re.split(r"(?=[■☑☒✓✔□])", text)
+                for segment in re.split(r"(?=[☑□])", text)
                 if _SELECTED_BOX_RE.match(segment.strip())
             ]
             parts = [_SELECTED_BOX_RE.sub("", part).strip(" ·|") for part in parts]
+        elif "□" in text:
+            # 빈 상자만 있는 칸은 학교가 아무것도 고르지 않았거나 표시가 추출에서
+            # 유실된 것이다. 메뉴 전체를 그대로 내보내면 모든 방법을 선택한 것처럼
+            # 보이므로 아무것도 싣지 않는다. 다만 첫 상자 앞에 글이 있으면
+            # ("교사 관찰 및 기록 □ 자기평가 □ 동료평가") 그 항목의 표시만 유실된
+            # 것이므로 그 앞부분은 살린다.
+            leading = text.split("□", 1)[0].strip(" ·|")
+            if not leading:
+                continue
+            parts = [leading]
         for part in parts:
             part = part.strip(" ·|")
             if not part or _METHOD_DROP_RE.search(part):
@@ -336,14 +371,23 @@ class CatalogRepository:
             )
             parameters.append(tag)
         for token in search:
+            # 검색창은 "수행평가명·평가 개요"를 찾는다고 안내하는데, 케이스가 가진
+            # 이름은 대표값 하나뿐이다. 한 케이스에 수행평가가 여럿이면 나머지
+            # 이름과 개요는 항목에만 있어 검색에 걸리지 않았다.
+            # ``idx_assessment_items_case_id`` 덕에 케이스마다 자기 항목만 본다.
             clauses.append(
                 "(c.primary_task_name LIKE ? ESCAPE '\\' "
                 "OR c.evidence_excerpt LIKE ? ESCAPE '\\' "
                 "OR c.school_name LIKE ? ESCAPE '\\' "
-                "OR c.subject LIKE ? ESCAPE '\\')"
+                "OR c.subject LIKE ? ESCAPE '\\' "
+                "OR EXISTS (SELECT 1 FROM assessment_items search_item"
+                " WHERE search_item.case_id = c.case_id"
+                " AND search_item.extraction_status = 'bounded'"
+                " AND (search_item.title LIKE ? ESCAPE '\\'"
+                " OR search_item.overview LIKE ? ESCAPE '\\')))"
             )
             pattern = like_pattern(token)
-            parameters.extend([pattern, pattern, pattern, pattern])
+            parameters.extend([pattern] * 6)
         if curriculum:
             if include_ambiguous and subject:
                 clauses.append("c.curriculum IN (?, 'shared')")
