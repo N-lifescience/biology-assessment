@@ -24,7 +24,15 @@
 `data/derived/biology_assessment_final_pipeline_completion.json`이 없으면 파이프라인을
 중복 실행하지 말고 기존 프로세스와 로그부터 확인한다.
 
-발행 DB(`data/publish/biology_assessment_catalog.sqlite`,
-`biology_assessment_catalog_detail.sqlite`)와 `official_biology_source_registry.json`은
-아직 없다. API(`services/biology-assessment-api/app/settings.py`)가 이 이름을 기대하므로
-파이프라인 산출 파일명을 여기에 맞춘다.
+발행 DB는 `services/biology-assessment-api/data/`의 gz 조각으로 저장소에 있고, 로컬에서는
+`data/publish/biology_assessment_catalog_detail.sqlite`로 풀어 쓴다(README "로컬 실행과 검증").
+
+- 원문 표가 깨져 보이면 두 층을 따로 본다. 화면 층은
+  `apps/biology-assessment-web/app/lib/source-table-segmentation.ts`(테스트 동봉), 데이터 층은
+  `scripts/biology_assessment_detail_parser.py`의 `markdown_fragment_to_html`(표 융합 판정)이다.
+  데이터 층을 고쳤으면 `scripts/refresh_biology_assessment_details.py`로 상세 표만 다시 만들고
+  `npm run audit:data`, `npm run audit:renderer`, `npm run package:vercel`, `npm run stage:vercel`
+  순으로 배포 패키지를 갱신한다.
+- 화면 층 수정은 전 항목 jsdom 감사로 효과를 잰다(`npm run audit:renderer`는 예외만 세고,
+  라벨 오분류 같은 품질 지표는 별도 스크립트로 센다).
+- 2학기(정시 3차) 원문 수집과 맥 추출 절차는 README "2학기 공시 갱신 절차"를 따른다.

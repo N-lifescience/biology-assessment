@@ -56,7 +56,11 @@ PERFORMANCE_MARKER_RE = re.compile(
     r"반영\s*비율|점수\s*/?\s*반영|평가\s*요소|배점|만점|실시\s*시기"
 )
 GENERIC_TITLE_RE = re.compile(
-    r"^(?:수행평가|정기시험|평가\s*세부\s*계획|평가의?\s*(?:목적|방침|방향)|"
+    # 단답형/서술형/선택형 are the 지필 columns of a school's 평가 종류 summary
+    # table, not performance-assessment names (논술형 stays: schools do run
+    # 논술형 수행평가).
+    r"^(?:수행평가|정기시험|지필(?:\s*평가)?|단답형|서술형|선택형|"
+    r"평가\s*세부\s*계획|평가의?\s*(?:목적|방침|방향)|"
     r"성취기준(?:과\s*성취수준)?|채점\s*기준|평가\s*방법|성취도|"
     r"결시자.*|미응시자.*|학적\s*변동.*|성적\s*처리.*|평가\s*결과.*)$"
 )
@@ -2221,11 +2225,11 @@ def markdown_fragment_to_html(markdown: str) -> str:
             merged = "\n".join(chunk)
             # A source page break can close a <table> mid-row -- commonly
             # mid-rowspan -- and reopen a fresh <table> for the remaining
-            # rows. Nothing legitimate separates two tables by blank lines
-            # alone: a real second table is always introduced by a heading or
-            # a label line first. Fuse the closing/reopening tags back into
-            # one continuous table so the reader sees the original one table,
-            # not two boxes with an unexplained gap and a mid-row cut.
+            # rows.  Fuse that continuation back into one table.  But the HWP
+            # converter also emits the overview table and the rubric table of
+            # one assessment back to back with only blank lines between them,
+            # so fuse only when the next table looks like a continuation: its
+            # first row is not a header row and is no wider than this table.
             while index < len(lines):
                 lookahead = index
                 while lookahead < len(lines) and not lines[lookahead].strip():
@@ -2245,6 +2249,8 @@ def markdown_fragment_to_html(markdown: str) -> str:
                     cursor += 1
                     if depth <= 0:
                         break
+                if not _looks_like_table_continuation(merged, "\n".join(next_chunk)):
+                    break
                 merged = re.sub(r"</table>\s*$", "", merged.rstrip())
                 continuation = re.sub(
                     r"^\s*<table\b[^>]*>",
@@ -2290,6 +2296,53 @@ def markdown_fragment_to_html(markdown: str) -> str:
             output.append(f"<p>{_inline_html(stripped)}</p>")
         index += 1
     return balance_table_tags("\n".join(output))
+
+
+def _table_row_width(row_html: str) -> int:
+    width = 0
+    for match in re.finditer(r"<t[dh]\b([^>]*)>", row_html, flags=re.I):
+        span = re.search(r"colspan\s*=\s*[\"']?(\d+)", match.group(1), flags=re.I)
+        width += int(span.group(1)) if span else 1
+    return width
+
+
+TABLE_HEADER_LABEL_RE = re.compile(
+    r"(평가요소|평가영역|영역명|채점기준|평가기준|세부기준|성취기준|성취수준|배점|점수|척도|등급|"
+    r"수준|횟수|반영비율|평정점|평가방법|평가유형|평가시기|수행과제|과제명|평가내용|평가항목)"
+)
+
+
+def _looks_like_table_continuation(table_html: str, next_table_html: str) -> bool:
+    """True when ``next_table_html`` is the page-break remainder of ``table_html``.
+
+    A genuine second table (the rubric after the overview, a new assessment)
+    opens with a header row of short field labels -- 평가요소 | 횟수 | 배점 ... --
+    or has a different column count from the table before it.  A page-break
+    remainder does neither: its first row carries sentence fragments cut by the
+    page break, and it is never wider than the table it continues.
+    """
+
+    next_row = re.search(r"<tr\b.*?</tr>", next_table_html, flags=re.I | re.S)
+    if next_row is None:
+        return False
+    cells = re.findall(r"<(t[dh])\b[^>]*>(.*?)</t[dh]>", next_row.group(0), flags=re.I | re.S)
+    all_header_cells = bool(cells) and all(tag.lower() == "th" for tag, _ in cells)
+    label_cells = [
+        compact_text(visible_text(text))
+        for _, text in cells
+        if TABLE_HEADER_LABEL_RE.search(compact_text(visible_text(text)))
+        and len(compact_text(visible_text(text))) <= 12
+    ]
+    if all_header_cells and label_cells:
+        return False
+    previous_rows = re.findall(r"<tr\b.*?</tr>", table_html, flags=re.I | re.S)
+    previous_width = max((_table_row_width(row) for row in previous_rows), default=0)
+    next_width = _table_row_width(next_row.group(0))
+    if next_width > previous_width:
+        return False
+    if all_header_cells and next_width != previous_width:
+        return False
+    return True
 
 
 def balance_table_tags(value: str) -> str:

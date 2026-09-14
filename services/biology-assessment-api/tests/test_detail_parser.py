@@ -217,6 +217,74 @@ def test_rubric_rows_do_not_become_separate_assessment_items() -> None:
     assert [item.title for item in section.items] == ["현상 분석 탐구 보고서"]
 
 
+def test_written_exam_columns_of_the_summary_table_are_not_assessment_titles() -> None:
+    source = """
+    # 생명과학
+    Ⅳ. 평가 방법
+    <table>
+    <tr><td>구분</td><td colspan="2">정기시험 (60%)</td><td colspan="2">수행평가 (40%)</td></tr>
+    <tr><td>평가영역</td><td>단답형</td><td>서술형</td><td>생명과학 에세이</td><td>독서발표</td></tr>
+    <tr><td>반영비율</td><td>30%</td><td>30%</td><td>25%</td><td>15%</td></tr>
+    </table>
+    2. 수행평가 세부 기준
+    <table>
+    <tr><td>평가 영역</td><td>생명과학 에세이</td><td>만점(반영비율)</td><td>100점(25%)</td></tr>
+    <tr><td>성취기준</td><td colspan="3">[12생과01-01] 세포를 설명할 수 있다</td></tr>
+    <tr><td>평가요소</td><td colspan="2">채점기준</td><td>배점</td></tr>
+    <tr><td>내용</td><td colspan="2">근거가 타당함</td><td>50</td></tr>
+    </table>
+    """
+
+    section = parse_assessment_section(source, "생명과학")
+
+    titles = [item.title for item in section.items if item.extraction_status == "bounded"]
+    assert "단답형" not in titles
+    assert "서술형" not in titles
+
+
+def test_rubric_table_after_overview_table_stays_a_separate_table() -> None:
+    fragment = """
+<table>
+<tr><th colspan="2">평가영역</th><th colspan="3">생명과학의 역사</th>
+<th>반영비율</th><th>20 %</th></tr>
+<tr><td colspan="2">교과 역량</td><td colspan="5"></td></tr>
+<tr><td colspan="2" rowspan="2">성취기준</td><td rowspan="2">[12생과Ⅱ01-01]</td>
+<td>상</td><td colspan="3">설명할 수 있다.</td></tr>
+<tr><td>중</td><td colspan="3">나열할 수 있다.</td></tr>
+</table>
+
+<table>
+<tr><th>평가요소</th><th>횟수</th><th>배점</th><th>채점기준</th><th>평정점</th></tr>
+<tr><td>내용의 적절성</td><td>1</td><td>80</td><td>논리적으로 표현한 경우</td><td>80</td></tr>
+</table>
+"""
+
+    rendered = markdown_fragment_to_html(fragment)
+
+    assert rendered.count("<table>") == 2
+    assert rendered.count("</table>") == 2
+
+
+def test_page_break_remainder_is_fused_back_into_its_table() -> None:
+    fragment = """
+<table>
+<tr><th>성취수준</th><th>수준 진술문</th></tr>
+<tr><td rowspan="3">A</td><td>구조와 기능을 연결해 설명할 수 있다</td></tr>
+</table>
+
+<table>
+<tr><td>구조를 설명할 수 있다</td></tr>
+<tr><td>구조를 나열할 수 있다</td></tr>
+</table>
+"""
+
+    rendered = markdown_fragment_to_html(fragment)
+
+    assert rendered.count("<table>") == 1
+    assert rendered.count("</table>") == 1
+    assert "구조를 나열할 수 있다" in rendered
+
+
 def test_summary_row_with_another_course_code_is_not_published() -> None:
     source = """
     # 생명과학

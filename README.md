@@ -16,14 +16,42 @@
 
 ## 현재 상태
 
-- 웹 `apps/biology-assessment-web`과 API `services/biology-assessment-api`를
-  생명과학 대상으로 리브랜딩 완료 (5개 화면 구조는 수학 판과 동일)
-- 수집·추출·분류 파이프라인(`scripts/`)과 데이터는 아직 없다.
-  API가 기대하는 발행 파일은 `data/publish/biology_assessment_catalog.sqlite`와
-  `data/publish/biology_assessment_catalog_detail.sqlite`다.
-- 데이터가 없으므로 화면의 수치 패널은 자리표시자(`—`)이고,
-  발행 데이터에 의존하는 API 테스트는 현재 실패한다(각 파일 상단 TODO 참고).
-- 다음 단계: 생명과학 평가계획 원문 수집 → 발행 DB 생성 → 화면 수치·테스트 기대값 확정
+- 웹 `apps/biology-assessment-web`과 API `services/biology-assessment-api`는 배포돼 있다
+  (`https://suhaeng-biology.vercel.app`, 11,848개 공개 항목).
+- 발행 DB는 `services/biology-assessment-api/data/*.sqlite.gz.part-*`로 저장소에 실려 있고,
+  로컬 검증용 `data/publish/`는 gitignore다.
+- 원문 수집·추출·분류 파이프라인(`scripts/`)은 2026-09-15부터 맥에서도 돈다.
+  윈도우 전용 `kordoc` 대신 `scripts/extract_biology_candidate_text.py`가 HWP(pyhwp)·HWPX·PDF·ZIP을
+  같은 JSONL 모양으로 뽑는다. 빠져 있던 `build_biology_extraction_retry_queue.py`,
+  `validate_biology_assessment_catalog.py`, `collect_schoolinfo_4ga_historical.py`도 다시 썼다.
+- 원문 첨부와 전체 본문 추출본(약 6GB)은 드라이브 공유 패키지 `학교알리미_원문추출본`에서
+  `data/drive/학교알리미_원문추출본/`로 복사해 둔다(T7 SSD에만 있고 GitHub에는 없다).
+
+## 2학기(정시 3차, 9월) 공시 갱신 절차
+
+학교알리미 4-가는 정시 1차(4월, `JG_CHASU=1`)에 1학기분, 정시 3차(9월, `JG_CHASU=3`)에 2학기분이
+올라온다. 3차 공시는 보통 9월 말에 게시된다(2025년은 9월 30일).
+
+```bash
+# 1) 공개됐는지 확인 (exit 0이면 공개, 2면 아직)
+.venv/bin/python scripts/collect_schoolinfo_4ga_historical.py --check-only --school 천안쌍용고등학교 --year 2026 --chasu 3
+
+# 2) 전국 수집 (약 2,370교, 0.8초 간격 → 1시간 안팎; 중단돼도 다시 실행하면 이어서 받는다)
+.venv/bin/python scripts/collect_schoolinfo_4ga_historical.py --schools data/derived/schoolinfo_schools.csv \
+  --year 2026 --chasu 3 --output-root data/raw/schoolinfo --log data/derived/schoolinfo_4ga_download_log_2026_3.csv
+
+# 3) 매니페스트 → 본문 추출(HWP는 파일당 15초쯤 걸린다. --workers 4 권장)
+.venv/bin/python scripts/build_biology_assessment_manifest.py --log data/derived/schoolinfo_4ga_download_log_2026_3.csv \
+  --output data/derived/biology_assessment_source_manifest_2026_3.csv
+.venv/bin/python scripts/extract_biology_candidate_text.py --manifest data/derived/biology_assessment_source_manifest_2026_3.csv \
+  --output data/derived/biology_allplan_remaining_text_2026_3_0000.jsonl --workers 4
+
+# 4) 이후는 기존 순서: 재시도 큐 → 근거 색인 → strict → 카탈로그 → 경향 → 검증 → 발행 DB
+#    (run_final_biology_assessment_pipeline.py 의 단계와 같다)
+```
+
+파서만 바뀌었을 때는 전체를 다시 돌리지 않고 `scripts/refresh_biology_assessment_details.py`로
+발행 DB의 상세 표(`assessment_items` 등)만 다시 만든다. `cases`와 `case_id`는 그대로 유지된다.
 
 ## 운영 배포
 
@@ -40,7 +68,7 @@
 
 ## 데이터 위치
 
-- 원문: `data/raw/schoolinfo/`
+- 원문: `data/raw/schoolinfo/` (새로 수집한 것), `data/drive/학교알리미_원문추출본/` (드라이브 패키지 사본)
 - 파생 데이터와 검증 결과: `data/derived/`
 - 서비스용 축약 DB와 품질 감사: `data/publish/`
 - 수집·추출·분류 스크립트: `scripts/`
@@ -50,17 +78,28 @@
 
 ## 로컬 실행과 검증
 
-의존성은 아직 설치하지 않았다. `pnpm-lock.yaml`은 수학 판에서 가져온 것이므로
-첫 실행 전 `pnpm install`로 다시 생성한다.
+맥 기준: Python 3.12(`brew install python@3.12`), pnpm 11(`npm i -g pnpm`), Node 24 이상.
 
-```powershell
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -r services/biology-assessment-api/requirements.txt -r services/biology-assessment-api/requirements-dev.txt
+.venv/bin/pip install pyhwp six olefile docopt pdfplumber openpyxl python-docx   # 원문 추출용
+pnpm install --frozen-lockfile
 npm run dev
 ```
 
 웹은 `http://127.0.0.1:3100`, API는 `http://127.0.0.1:8010`에서 실행된다.
+API 테스트는 `data/publish/biology_assessment_catalog_detail.sqlite`(와 같은 내용의
+`biology_assessment_catalog.sqlite`)가 있어야 한다. 배포 패키지에서 풀어 두면 된다.
+
+```bash
+cat services/biology-assessment-api/data/biology_assessment_catalog_detail.sqlite.gz.part-* | gunzip > data/publish/biology_assessment_catalog_detail.sqlite
+cp data/publish/biology_assessment_catalog_detail.sqlite data/publish/biology_assessment_catalog.sqlite
+```
+
 테스트·코드 검사·프로덕션 빌드는 다음 명령으로 한 번에 확인한다.
 
-```powershell
+```bash
 npm run verify
 ```
 
@@ -74,8 +113,8 @@ npm run verify
 
 ## 파이프라인 완료 확인
 
-```powershell
-Get-Content -LiteralPath 'data\derived\biology_assessment_final_pipeline.log.jsonl' -Tail 30 -Encoding utf8
+```bash
+tail -n 30 data/derived/biology_assessment_final_pipeline.log.jsonl
 ```
 
 전체 완료 여부는 다음 두 파일의 존재와 검증 통과 결과를 함께 확인한다.
