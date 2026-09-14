@@ -173,6 +173,7 @@ describe("segmentSourceTables", () => {
       removedEmptyTableCount: 0,
       prunedBlankRowCount: 0,
       headerSplitCount: 0,
+      unwrappedHeadingTableCount: 0,
     };
 
     expect(segmentSourceTables("   ")).toEqual({ html: "   ", ...zeroed });
@@ -336,5 +337,21 @@ describe("segmentSourceTables", () => {
       "표현|논리적임|10",
       "|",
     ]);
+  });
+
+  it("turns a boxed section-number heading table back into a heading", () => {
+    const html = `
+      <table><thead><tr><th>Ⅴ</th><th></th><th>평가의 종류와 반영 비율</th></tr></thead><tbody></tbody></table>
+      <table>${row("평가 종류", "정기 시험", "수행평가")}${row("반영 비율", "40%", "60%")}</table>`;
+
+    const result = segmentSourceTables(html);
+
+    expect(result.unwrappedHeadingTableCount).toBe(1);
+    const document = parse(result.html);
+    expect(document.querySelector("[data-source-unwrapped-heading]")?.textContent).toBe(
+      "Ⅴ 평가의 종류와 반영 비율",
+    );
+    // A one-row label/value table with a score stays a table.
+    expect(tables(result.html)).toHaveLength(1);
   });
 });
