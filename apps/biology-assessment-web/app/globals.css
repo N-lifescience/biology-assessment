@@ -1248,6 +1248,7 @@ a { color: inherit; }
 .sourceTableScroll > table > tbody > tr > *:first-child { border-left: 0; }
 .sourceTableScroll > table > tbody > tr > *:last-child { border-right: 0; }
 .sourceTableScroll > table > tbody > tr:last-child > * { border-bottom: 0; }
+.sourceDocumentHtml .sourceUnwrappedHeading { margin: 1rem 0 0.4rem; font-weight: 700; color: #173e2d; }
 .sourceDocumentHtml .sourceFlattenedTable { display: inline-block; padding: 0.15rem 0.4rem; border: 1px dashed #b7c1ba; border-radius: 0.25rem; line-height: 1.5; }
 .sourceTableScroll + .sourceTableScroll { border-top: 1px solid #c9d1cc; }
 .sourceDocumentHtml [data-source-reconstructed-cell="true"] { text-decoration: underline dotted #8b8b84 1px; text-underline-offset: 0.18rem; }

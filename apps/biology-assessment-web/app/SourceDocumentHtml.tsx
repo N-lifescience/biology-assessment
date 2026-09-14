@@ -20,6 +20,7 @@ export default function SourceDocumentHtml({ html }: { html: string }) {
     || segmented.removedEmptyTableCount
     || segmented.prunedBlankRowCount
     || segmented.headerSplitCount
+    || segmented.unwrappedHeadingTableCount
   );
   return (
     <div
@@ -37,6 +38,7 @@ export default function SourceDocumentHtml({ html }: { html: string }) {
       data-source-removed-empty-tables={segmented.removedEmptyTableCount || undefined}
       data-source-pruned-blank-rows={segmented.prunedBlankRowCount || undefined}
       data-source-header-splits={segmented.headerSplitCount || undefined}
+      data-source-unwrapped-headings={segmented.unwrappedHeadingTableCount || undefined}
       dangerouslySetInnerHTML={{ __html: segmented.html }}
     />
   );

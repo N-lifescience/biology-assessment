@@ -14,6 +14,7 @@ export type SegmentedSourceHtml = {
   removedEmptyTableCount: number;
   prunedBlankRowCount: number;
   headerSplitCount: number;
+  unwrappedHeadingTableCount: number;
 };
 
 type SectionKey = "overview" | "standards" | "method" | "rubric";
@@ -488,6 +489,35 @@ function flattenNestedTables(document: Document) {
   return flattenedCount;
 }
 
+const SECTION_NUMBER_RE = /^(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[0-9]{1,2}|[가-힣])[.)]?$/u;
+
+/**
+ * Converters turn a boxed section heading ("Ⅴ | | 평가의 종류와 반영 비율")
+ * into a one-row table.  When the only content is a section number plus a
+ * short title, show it as the heading it was instead of an empty grid.
+ */
+function unwrapHeadingTables(document: Document) {
+  let unwrappedCount = 0;
+  for (const table of Array.from(document.body.querySelectorAll("table"))) {
+    const rows = Array.from(table.rows).filter((row) => compact(row.textContent || ""));
+    if (rows.length !== 1 || table.querySelector("table")) continue;
+    const texts = Array.from(rows[0].cells)
+      .map((cell) => (cell.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    if (!texts.length || texts.length > 3) continue;
+    const joined = texts.join(" ");
+    const numbered = texts.length >= 2 && SECTION_NUMBER_RE.test(compact(texts[0]));
+    if (!(numbered || texts.length === 1) || joined.length > 60 || /\d+\s*[점%]/.test(joined)) continue;
+    const heading = document.createElement("p");
+    heading.className = "sourceUnwrappedHeading";
+    heading.setAttribute("data-source-unwrapped-heading", "true");
+    heading.textContent = joined;
+    table.replaceWith(heading);
+    unwrappedCount += 1;
+  }
+  return unwrappedCount;
+}
+
 /** Drop tables that carry no text at all (leftover converter wrappers). */
 function removeEmptyTables(document: Document) {
   let removedCount = 0;
@@ -755,6 +785,7 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
       removedEmptyTableCount: 0,
       prunedBlankRowCount: 0,
       headerSplitCount: 0,
+      unwrappedHeadingTableCount: 0,
     };
   }
 
@@ -762,6 +793,7 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
   sanitizeDangerousMarkup(document);
   const flattenedNestedTableCount = flattenNestedTables(document);
   const removedEmptyTableCount = removeEmptyTables(document);
+  const unwrappedHeadingTableCount = unwrapHeadingTables(document);
   const reconstructedCellCount = mergeSuffixContinuationTables(document);
   let gradeContinuationRowCount = mergeAchievementLevelContinuations(document);
   const mergedFragmentCount = mergeRepeatedHeaderTables(document);
@@ -845,5 +877,6 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
     removedEmptyTableCount,
     prunedBlankRowCount,
     headerSplitCount,
+    unwrappedHeadingTableCount,
   };
 }
