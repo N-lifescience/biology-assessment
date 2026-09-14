@@ -223,7 +223,8 @@ def test_written_exam_columns_of_the_summary_table_are_not_assessment_titles() -
     Ⅳ. 평가 방법
     <table>
     <tr><td>구분</td><td colspan="2">정기시험 (60%)</td><td colspan="2">수행평가 (40%)</td></tr>
-    <tr><td>평가영역</td><td>단답형</td><td>서술형</td><td>생명과학 에세이</td><td>독서발표</td></tr>
+    <tr><td>평가영역</td><td>단답형</td><td>서술형</td>
+    <td>생명과학 에세이</td><td>독서발표</td></tr>
     <tr><td>반영비율</td><td>30%</td><td>30%</td><td>25%</td><td>15%</td></tr>
     </table>
     2. 수행평가 세부 기준
