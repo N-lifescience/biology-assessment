@@ -467,7 +467,7 @@ function groupShortDisplacedHeadings(document: Document) {
  */
 function flattenNestedTables(document: Document) {
   let flattenedCount = 0;
-  const nested = Array.from(document.body.querySelectorAll("table table")).reverse();
+  const nested = Array.from(document.body.querySelectorAll<HTMLTableElement>("table table")).reverse();
   for (const inner of nested) {
     if (!inner.isConnected) continue;
     const lines = Array.from(inner.rows)

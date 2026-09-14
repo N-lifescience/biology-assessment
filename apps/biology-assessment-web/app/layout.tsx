@@ -22,6 +22,11 @@ const spokaHanSansNeo = localFont({
   display: "swap",
 });
 
+// Every page is rendered per request so the CSP script nonce issued in
+// proxy.ts reaches the script tags; statically prerendered pages would carry
+// no nonce and the browser would block their scripts.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   metadataBase: new URL("https://suhaeng-biology.vercel.app"),
   title: {
