@@ -10,6 +10,7 @@ ESCAPED_ROW_PARAGRAPH_RE = re.compile(
     r"<p>\s*(&lt;tr\b.*?&lt;/tr&gt;)\s*</p>",
     flags=re.IGNORECASE | re.DOTALL,
 )
+ORPHAN_TABLE_END_RE = re.compile(r"^\s*</table\s*>", flags=re.IGNORECASE)
 ESCAPED_TABLE_WRAPPER_RE = re.compile(
     r"<p>\s*&lt;/?table(?:\s+.*?)?&gt;\s*</p>",
     flags=re.IGNORECASE | re.DOTALL,
@@ -19,6 +20,13 @@ UNSAFE_BLOCK_RE = re.compile(
     flags=re.IGNORECASE | re.DOTALL,
 )
 TABLE_RE = re.compile(r"<table\b.*?</table\s*>", flags=re.IGNORECASE | re.DOTALL)
+# A converter that escaped every row also left the real ``<table>`` wrapper
+# behind as an empty shell (``<table>\n<table><tr>...``).  Browsers parse the
+# second ``<table>`` as a sibling, so the shell renders as an empty table.
+EMPTY_TABLE_SHELL_RE = re.compile(
+    r"<table\b[^>]*>\s*(?=<table\b)|<table\b[^>]*>\s*</table\s*>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 class _SafeTableParser(HTMLParser):
@@ -96,9 +104,14 @@ def restore_escaped_table_rows(value: str) -> str:
         cursor = match.end()
 
     tail = source[cursor:]
+    if pending_rows:
+        # The shell's own ``</table>`` directly after the last escaped row would
+        # otherwise trail the restored table as a stray end tag.
+        tail = ORPHAN_TABLE_END_RE.sub("", tail, count=1)
     flush_rows()
     output.append(tail)
-    return UNSAFE_BLOCK_RE.sub("", "".join(output))
+    restored = UNSAFE_BLOCK_RE.sub("", "".join(output))
+    return EMPTY_TABLE_SHELL_RE.sub("", restored)
 
 
 def rubric_tables_from_source_html(value: str) -> str:

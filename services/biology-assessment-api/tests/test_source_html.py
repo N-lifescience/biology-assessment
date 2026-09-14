@@ -19,6 +19,24 @@ def test_restores_pdf_escaped_rows_as_a_safe_html_table() -> None:
     assert "<script" not in restored
 
 
+def test_drops_the_empty_table_shell_left_around_escaped_rows() -> None:
+    escaped = (
+        "다. 최소성취수준: 학업 성취율 40%<br><table>\n"
+        "<p>&lt;tr&gt;&lt;th&gt;평가영역1&lt;/th&gt;"
+        "&lt;th&gt;과학 신문 만들기&lt;/th&gt;&lt;/tr&gt;</p>\n"
+        "<p>&lt;tr&gt;&lt;td&gt;성취수준&lt;/td&gt;"
+        "&lt;td&gt;A 설명할 수 있다&lt;/td&gt;&lt;/tr&gt;</p>\n"
+        "</table>"
+    )
+
+    restored = restore_escaped_table_rows(escaped)
+
+    assert restored.count("<table>") == 1
+    assert "<table>\n<table>" not in restored
+    assert restored.count("</table>") == 1
+    assert "과학 신문 만들기" in restored
+
+
 def test_keeps_already_safe_source_html_unchanged() -> None:
     source = "<table><tr><th>평가명</th><td>생명과학 독서 글쓰기</td></tr></table>"
 

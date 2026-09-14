@@ -16,6 +16,10 @@ export default function SourceDocumentHtml({ html }: { html: string }) {
     || segmented.gradeContinuationRowCount
     || segmented.prunedTrailingColumnCount
     || segmented.normalizedLongHeaderCellCount
+    || segmented.flattenedNestedTableCount
+    || segmented.removedEmptyTableCount
+    || segmented.prunedBlankRowCount
+    || segmented.headerSplitCount
   );
   return (
     <div
@@ -29,6 +33,10 @@ export default function SourceDocumentHtml({ html }: { html: string }) {
       data-source-grade-continuation-rows={segmented.gradeContinuationRowCount || undefined}
       data-source-pruned-trailing-columns={segmented.prunedTrailingColumnCount || undefined}
       data-source-normalized-long-header-cells={segmented.normalizedLongHeaderCellCount || undefined}
+      data-source-flattened-nested-tables={segmented.flattenedNestedTableCount || undefined}
+      data-source-removed-empty-tables={segmented.removedEmptyTableCount || undefined}
+      data-source-pruned-blank-rows={segmented.prunedBlankRowCount || undefined}
+      data-source-header-splits={segmented.headerSplitCount || undefined}
       dangerouslySetInnerHTML={{ __html: segmented.html }}
     />
   );
