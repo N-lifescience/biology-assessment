@@ -169,6 +169,10 @@ describe("segmentSourceTables", () => {
       gradeContinuationRowCount: 0,
       prunedTrailingColumnCount: 0,
       normalizedLongHeaderCellCount: 0,
+      flattenedNestedTableCount: 0,
+      removedEmptyTableCount: 0,
+      prunedBlankRowCount: 0,
+      headerSplitCount: 0,
     };
 
     expect(segmentSourceTables("   ")).toEqual({ html: "   ", ...zeroed });
@@ -202,5 +206,135 @@ describe("segmentSourceTables", () => {
     expect(result.html).not.toContain("<script");
     expect(result.html).not.toContain("onerror");
     expect(result.html).not.toContain("javascript:");
+  });
+
+  function th(...cells: string[]) {
+    return `<tr>${cells.map((cell) => `<th>${cell}</th>`).join("")}</tr>`;
+  }
+
+  function headings(html: string) {
+    return Array.from(parse(html).querySelectorAll("section.sourceTableSection h3"))
+      .map((heading) => heading.textContent);
+  }
+
+  it("reads 평가영역 / 영역명 style first cells as the overview block, not as standards", () => {
+    for (const label of ["평가 영역", "평가영역(단원)", "평가영역1", "영역명", "수행평가 영역"]) {
+      const html = `<table>${[
+        row(label, "생명 시스템 탐구"),
+        row("수행 과제", "세포 관찰 보고서 작성"),
+        row("성취기준", "[12생과Ⅰ01-01] 세포의 구조를 설명할 수 있다"),
+        row("A", "세포의 구조와 기능을 연결해 설명할 수 있다"),
+        row("B", "세포의 구조를 설명할 수 있다"),
+        row("평가방법", "관찰 및 보고서"),
+      ].join("")}</table>`;
+
+      expect(headings(segmentSourceTables(html).html), label).toEqual([
+        "평가 개요·수행과제",
+        "성취기준·성취수준",
+        "평가 방법·운영",
+      ]);
+    }
+  });
+
+  it("treats a summary header row followed by 반영 비율 as the overview block", () => {
+    const html = `<table>${[
+      th("평가 종류", "정기 시험", "수행평가", "합계"),
+      row("반영 비율", "40%", "60%", "100%"),
+      row("횟수/영역", "2차", "탐구 보고서", "-"),
+      row("영역만점", "100점", "20점", ""),
+      row("성취기준", "[12생과Ⅰ01-01]", "", ""),
+      row("A", "설명할 수 있다", "", ""),
+    ].join("")}</table>`;
+
+    expect(headings(segmentSourceTables(html).html)).toEqual([
+      "평가 개요·수행과제",
+      "성취기준·성취수준",
+    ]);
+  });
+
+  it("starts a new table at a converter header row that fused two source tables", () => {
+    const html = `<table>${[
+      row("평가영역", "생명과학의 역사", "반영비율", "20 %"),
+      row("수행과제", "탐구 보고서", "", ""),
+      row("성취기준", "[12생과Ⅱ01-01]", "상", "설명할 수 있다"),
+      row("", "", "중", "나열할 수 있다"),
+      th("평가요소", "횟수", "배점", "채점기준", "평정점"),
+      row("내용의 적절성", "1", "80", "객관적이고 논리적으로 표현한 경우", "80"),
+      row("글의 양식", "1", "20", "글의 양식을 잘 지킨 경우", "20"),
+    ].join("")}</table>`;
+
+    const result = segmentSourceTables(html);
+
+    // The header row opens a differently labelled section, so it gets its own
+    // heading rather than a same-heading continuation.
+    expect(result.headerSplitCount).toBe(0);
+    expect(headings(result.html)).toEqual([
+      "평가 개요·수행과제",
+      "성취기준·성취수준",
+      "채점 기준·배점",
+    ]);
+    const rubric = tables(result.html).at(-1)!;
+    expect(rowTexts(rubric)[0]).toBe("평가요소|횟수|배점|채점기준|평정점");
+    // The fused rubric keeps its own 5-column grid: no placeholder cells were added.
+    expect(rubric.rows[1].cells).toHaveLength(5);
+  });
+
+  it("puts a repeated header row inside one section under the same heading", () => {
+    const html = `<table>${[
+      th("평가요소", "채점기준", "배점"),
+      row("근거", "과학적 근거가 타당함", "10"),
+      row("표현", "논리적으로 표현함", "10"),
+      th("평가요소", "채점기준", "배점"),
+      row("태도", "적극적으로 참여함", "5"),
+      row("제출", "기한 내 제출함", "5"),
+    ].join("")}</table>`;
+
+    const result = segmentSourceTables(html);
+
+    expect(result.headerSplitCount).toBe(1);
+    expect(headings(result.html)).toEqual(["채점 기준·배점"]);
+    expect(tables(result.html)).toHaveLength(2);
+    expect(tables(result.html).flatMap(rowTexts)).toHaveLength(6);
+  });
+
+  it("flattens a table nested inside a cell into that cell's text", () => {
+    const html = `<table>${[
+      row("평가영역명", "탐구"),
+      `<tr><td>평가유형</td><td><table><tr><th>( 탐구보고서 )</th></tr><tr><td>개인</td><td>모둠</td></tr></table></td></tr>`,
+    ].join("")}</table>`;
+
+    const result = segmentSourceTables(html);
+
+    expect(result.flattenedNestedTableCount).toBe(1);
+    expect(tables(result.html)).toHaveLength(1);
+    const cell = parse(result.html).querySelector("[data-source-flattened-table]")!;
+    expect(cell.innerHTML).toBe("( 탐구보고서 )<br>개인 · 모둠");
+  });
+
+  it("removes tables with no text and rows that are blank in every cell", () => {
+    const html = `
+      <table></table>
+      <table><tr><td></td><td></td></tr></table>
+      <table>${[
+        row("평가요소", "채점기준", "배점"),
+        row("", "", ""),
+        row("근거", "타당함", "10"),
+        `<tr><td rowspan="2">표현</td><td>논리적임</td><td>10</td></tr>`,
+        row("", ""),
+      ].join("")}</table>`;
+
+    const result = segmentSourceTables(html);
+
+    expect(result.removedEmptyTableCount).toBe(2);
+    expect(result.prunedBlankRowCount).toBe(1);
+    const [table] = tables(result.html);
+    expect(tables(result.html)).toHaveLength(1);
+    // The row spanned by 표현 stays: it is a continuation, not a blank row.
+    expect(rowTexts(table)).toEqual([
+      "평가요소|채점기준|배점",
+      "근거|타당함|10",
+      "표현|논리적임|10",
+      "|",
+    ]);
   });
 });

@@ -10,6 +10,10 @@ export type SegmentedSourceHtml = {
   gradeContinuationRowCount: number;
   prunedTrailingColumnCount: number;
   normalizedLongHeaderCellCount: number;
+  flattenedNestedTableCount: number;
+  removedEmptyTableCount: number;
+  prunedBlankRowCount: number;
+  headerSplitCount: number;
 };
 
 type SectionKey = "overview" | "standards" | "method" | "rubric";
@@ -18,6 +22,12 @@ type SectionRange = {
   key: SectionKey;
   start: number;
   end: number;
+  /**
+   * True when this range begins at a converter header row inside the same
+   * logical section: it is rendered as a second table under the previous
+   * heading instead of repeating the heading.
+   */
+  continues: boolean;
 };
 
 type CellPlacement = {
@@ -39,6 +49,33 @@ function compact(value: string) {
   return value.replace(/\s+/g, "").replace(/[·･ㆍ:：]/g, "");
 }
 
+/**
+ * Labels a source table uses in its first column to open the overview block
+ * of one assessment.  Converters spell them many ways (평가영역, 평가 영역(단원),
+ * 평가영역1, 영역명, 수행평가명 ...), so match the compacted prefix only.
+ */
+const OVERVIEW_FIRST_CELL_RE = (
+  /^(평가영역|영역명|수행평가영역|수행평가명|평가명|평가주제|평가단원|단원명|반영비율|영역만점|수행과제|평가과제|과제명|평가내용|평가문항|평가항목|평가종류)/
+);
+
+function isRubricHeaderText(all: string) {
+  return (
+    /평가요소/.test(all)
+    && /(채점기준|수행수준|평가척도|평가기준|세부기준|세부평가기준)/.test(all)
+    && /(배점|점수|척도)/.test(all)
+  );
+}
+
+/** A converter header row: every cell is a ``th`` and at least one has text. */
+function isHeaderRow(row: HTMLTableRowElement) {
+  const cells = Array.from(row.cells);
+  return (
+    cells.length >= 2
+    && cells.every((cell) => cell.tagName === "TH")
+    && cells.some((cell) => compact(cell.textContent || ""))
+  );
+}
+
 function rowSection(row: HTMLTableRowElement): SectionKey | null {
   const cells = Array.from(row.cells).map((cell) => compact(cell.textContent || ""));
   const leading = cells.filter(Boolean).slice(0, 3);
@@ -46,7 +83,18 @@ function rowSection(row: HTMLTableRowElement): SectionKey | null {
   const early = leading.join(" ");
   const all = cells.join(" ");
 
-  if (/(?:^| )(평가영역명|수행과제|평가과제|과제명)/.test(early)) return "overview";
+  // A rubric header ("평가 영역 | 평가 요소 | 채점 기준 | 배점") also starts with
+  // 평가영역, so it must be recognised before the overview labels.
+  if (isRubricHeaderText(all)) return "rubric";
+  if (
+    isHeaderRow(row)
+    && /(배점|점수|척도)/.test(all)
+    && /(등급|수준|기준|요소|척도)/.test(all)
+    && !/성취기준/.test(all)
+  ) return "rubric";
+  if (OVERVIEW_FIRST_CELL_RE.test(first) || /(?:^| )(평가영역명|수행과제|평가과제|과제명)/.test(early)) {
+    return "overview";
+  }
   if (/성취기준/.test(early) || /성취기준별성취수준/.test(early)) return "standards";
   if (/(?:^| )평가(방법|방식|유형|시기)/.test(early)) return "method";
   if (
@@ -59,6 +107,9 @@ function rowSection(row: HTMLTableRowElement): SectionKey | null {
 function inferredInitialSection(rows: HTMLTableRowElement[]): SectionKey {
   const explicit = rowSection(rows[0]);
   if (explicit) return explicit;
+  // "평가 종류 | 정기시험 | 수행평가 | 합계" followed by "반영 비율 | 40% | ..." is
+  // the summary block of an assessment plan, not an achievement-level table.
+  if (rows.length > 1 && isHeaderRow(rows[0]) && rowSection(rows[1]) === "overview") return "overview";
   const sample = compact(rows.slice(0, 8).map((row) => row.textContent || "").join(" "));
   if (/\[12[A-Za-z가-힣ⅠⅡ]{1,16}\d{2}[-‐‑‒–—]\d{2}\]/u.test(sample)) return "standards";
   if (/(?:^|[^A-Za-z])A(?:[^A-Za-z]|$)/.test(sample) && /수있다/.test(sample)) return "standards";
@@ -407,6 +458,79 @@ function groupShortDisplacedHeadings(document: Document) {
   return groupCount;
 }
 
+/**
+ * Converters nest a one-cell table inside a cell for boxed text such as
+ * "( 탐구보고서 )".  A table inside a table renders as a broken grid, so the
+ * inner rows are flattened to text (cells joined with " · ", rows on their own
+ * line).  Nothing is dropped and nothing is invented.
+ */
+function flattenNestedTables(document: Document) {
+  let flattenedCount = 0;
+  const nested = Array.from(document.body.querySelectorAll("table table")).reverse();
+  for (const inner of nested) {
+    if (!inner.isConnected) continue;
+    const lines = Array.from(inner.rows)
+      .map((row) => Array.from(row.cells)
+        .map((cell) => (cell.textContent || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .join(" · "))
+      .filter(Boolean);
+    const replacement = document.createElement("span");
+    replacement.className = "sourceFlattenedTable";
+    replacement.setAttribute("data-source-flattened-table", "true");
+    for (const [index, line] of lines.entries()) {
+      if (index) replacement.append(document.createElement("br"));
+      replacement.append(document.createTextNode(line));
+    }
+    inner.replaceWith(replacement);
+    flattenedCount += 1;
+  }
+  return flattenedCount;
+}
+
+/** Drop tables that carry no text at all (leftover converter wrappers). */
+function removeEmptyTables(document: Document) {
+  let removedCount = 0;
+  for (const table of Array.from(document.body.querySelectorAll("table"))) {
+    if (compact(table.textContent || "") || table.querySelector("img")) continue;
+    table.remove();
+    removedCount += 1;
+  }
+  return removedCount;
+}
+
+/**
+ * Remove rows that are blank in every cell they start, unless a cell from an
+ * earlier row spans through them (then the row is a real continuation) or a
+ * blank cell itself spans downward (removing it would shift the grid).
+ */
+function pruneBlankRows(document: Document) {
+  let prunedCount = 0;
+  for (const table of Array.from(document.body.querySelectorAll("table"))) {
+    const rows = Array.from(table.rows);
+    if (rows.length < 2) continue;
+    const placements = tableCellPlacements(rows);
+    const removable: HTMLTableRowElement[] = [];
+    for (const [rowIndex, row] of rows.entries()) {
+      const starting = placements.filter((placement) => placement.rowStart === rowIndex);
+      if (!starting.length) continue;
+      const blank = starting.every((placement) => !compact(placement.cell.textContent || ""));
+      const spansDown = starting.some((placement) => placement.rowEnd - placement.rowStart > 1);
+      const covered = placements.some(
+        (placement) => placement.rowStart < rowIndex && placement.rowEnd > rowIndex,
+      );
+      if (blank && !spansDown && !covered) removable.push(row);
+    }
+    if (removable.length === rows.length) continue;
+    for (const row of removable) {
+      row.remove();
+      prunedCount += 1;
+    }
+    if (removable.length) table.setAttribute("data-source-pruned-blank-rows", String(removable.length));
+  }
+  return prunedCount;
+}
+
 function clampOverflowingRowspans(document: Document) {
   let clampedCount = 0;
   for (const table of Array.from(document.body.querySelectorAll("table"))) {
@@ -428,7 +552,7 @@ function clampOverflowingRowspans(document: Document) {
 
 function sectionRanges(rows: HTMLTableRowElement[]): SectionRange[] {
   let currentKey: SectionKey = inferredInitialSection(rows);
-  const sections: SectionRange[] = [{ key: currentKey, start: 0, end: rows.length }];
+  const sections: SectionRange[] = [{ key: currentKey, start: 0, end: rows.length, continues: false }];
 
   for (const [rowIndex, row] of rows.entries()) {
     const candidate = rowSection(row);
@@ -443,7 +567,17 @@ function sectionRanges(rows: HTMLTableRowElement[]): SectionRange[] {
     ) {
       sections.at(-1)!.end = rowIndex;
       currentKey = candidate;
-      sections.push({ key: currentKey, start: rowIndex, end: rows.length });
+      sections.push({ key: currentKey, start: rowIndex, end: rows.length, continues: false });
+      continue;
+    }
+    // PDF/HWP converters often drop the ``</table><table>`` boundary between
+    // two source tables, so a second table's header row lands in the middle of
+    // the first.  Start a new table there (same heading) so each keeps its own
+    // column grid instead of the rubric being squeezed into the overview grid.
+    if (rowIndex > 0 && rowIndex > sections.at(-1)!.start && isHeaderRow(row)) {
+      sections.at(-1)!.end = rowIndex;
+      if (candidate && candidate !== currentKey) currentKey = candidate;
+      sections.push({ key: currentKey, start: rowIndex, end: rows.length, continues: true });
     }
   }
   return sections;
@@ -617,19 +751,29 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
       gradeContinuationRowCount: 0,
       prunedTrailingColumnCount: 0,
       normalizedLongHeaderCellCount: 0,
+      flattenedNestedTableCount: 0,
+      removedEmptyTableCount: 0,
+      prunedBlankRowCount: 0,
+      headerSplitCount: 0,
     };
   }
 
   const document = new DOMParser().parseFromString(value, "text/html");
   sanitizeDangerousMarkup(document);
+  const flattenedNestedTableCount = flattenNestedTables(document);
+  const removedEmptyTableCount = removeEmptyTables(document);
   const reconstructedCellCount = mergeSuffixContinuationTables(document);
   let gradeContinuationRowCount = mergeAchievementLevelContinuations(document);
   const mergedFragmentCount = mergeRepeatedHeaderTables(document);
   const orphanStandardGroupCount = groupOrphanAchievementStandards(document);
   const recoveredNoteGroupCount = groupShortDisplacedHeadings(document);
   const clampedRowspanCount = clampOverflowingRowspans(document);
+  // Blank-row pruning runs after the page-break repairs above: those repairs
+  // read blank placeholder rows as evidence of a split page.
+  const prunedBlankRowCount = pruneBlankRows(document);
   let splitTableCount = 0;
   let sectionCount = 0;
+  let headerSplitCount = 0;
 
   for (const table of Array.from(document.body.querySelectorAll("table"))) {
     const rows = Array.from(table.rows);
@@ -643,23 +787,32 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
     wrapper.setAttribute("role", "group");
     wrapper.setAttribute("aria-label", "원문 표 구획");
 
+    let sectionElement: HTMLElement | null = null;
+    let sectionKey: SectionKey | null = null;
     for (const [index, section] of sections.entries()) {
-      const sectionElement = document.createElement("section");
-      sectionElement.className = "sourceTableSection";
-
-      const heading = document.createElement("h3");
-      heading.textContent = SECTION_META[section.key].label;
-      sectionElement.append(heading);
+      const continuesPrevious = section.continues && sectionElement !== null && section.key === sectionKey;
+      if (!continuesPrevious) {
+        sectionElement = document.createElement("section");
+        sectionElement.className = "sourceTableSection";
+        const heading = document.createElement("h3");
+        heading.textContent = SECTION_META[section.key].label;
+        sectionElement.append(heading);
+        wrapper.append(sectionElement);
+        sectionKey = section.key;
+        sectionCount += 1;
+      } else {
+        headerSplitCount += 1;
+      }
 
       const scroll = document.createElement("div");
       scroll.className = "sourceTableScroll";
       const sectionTable = table.cloneNode(false) as HTMLTableElement;
       sectionTable.removeAttribute("id");
       sectionTable.setAttribute("aria-label", SECTION_META[section.key].label);
+      if (section.continues) sectionTable.setAttribute("data-source-header-split", "true");
       sectionTable.append(sectionBody(document, rows, placements, section));
       scroll.append(sectionTable);
-      sectionElement.append(scroll);
-      wrapper.append(sectionElement);
+      sectionElement!.append(scroll);
 
       if (index === 0) {
         const caption = table.querySelector(":scope > caption");
@@ -669,7 +822,6 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
 
     table.replaceWith(wrapper);
     splitTableCount += 1;
-    sectionCount += sections.length;
   }
   // Section splitting can expose a page-break continuation that was embedded
   // in one converter table. Repair that newly adjacent A-C / D-E pair too.
@@ -689,5 +841,9 @@ export function segmentSourceTables(value: string): SegmentedSourceHtml {
     gradeContinuationRowCount,
     prunedTrailingColumnCount,
     normalizedLongHeaderCellCount,
+    flattenedNestedTableCount,
+    removedEmptyTableCount,
+    prunedBlankRowCount,
+    headerSplitCount,
   };
 }
