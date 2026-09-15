@@ -29,6 +29,23 @@ COURSE_HEADING_MARKERS = (
     "교수학습-평가방법",
     "교수학습및평가방법",
 )
+# A bare course name as a heading ("# 체육", "# 화학Ⅰ", "# 확률과 통계") opens
+# the next course in a combined plan.  Only names are matched, never section
+# words, so "# 교수·학습" or "# 나. 피드백 및 기록" inside a course never ends it.
+OTHER_COURSE_HEADING_RE = re.compile(
+    r"(?:국어|문학|독서와작문|화법과언어|언어와매체|독서|화법과작문|"
+    r"수학|공통수학[12]?|기본수학[12]?|대수|미적분[ⅠⅡI]*|확률과통계|기하|경제수학|인공지능수학|실용수학|수학과제탐구|"
+    r"영어|공통영어[12]?|기본영어[12]?|영어[ⅠⅡI]+|영어회화|영어독해와작문|영어독해|영어작문|심화영어[가-힣]*|"
+    r"한국사[12]?|통합사회[12]?|사회|생활과윤리|윤리와사상|현대사회와윤리|도덕|세계사|동아시아사|동아시아역사기행|"
+    r"한국지리|세계지리|세계시민과지리|여행지리|경제|정치와법|정치|법과사회|사회와문화|사회문화|사회문제탐구|"
+    r"물리학[ⅠⅡI12]*|화학[ⅠⅡI12]*|지구과학[ⅠⅡI12]*|역학과에너지|전자기와양자|물질과에너지|화학반응의세계|"
+    r"지구시스템과학|행성우주과학|융합과학|과학사|과학탐구실험[12]?|통합과학[12]?|"
+    r"체육[12]?|운동과건강|스포츠생활[12]?|스포츠문화|스포츠과학|음악|음악연주|음악감상과비평|미술|미술창작|미술감상과비평|"
+    r"연극|기술가정|기술·가정|정보|인공지능기초|프로그래밍|데이터과학|"
+    r"일본어[ⅠⅡI]*|중국어[ⅠⅡI]*|독일어[ⅠⅡI]*|프랑스어[ⅠⅡI]*|스페인어[ⅠⅡI]*|러시아어[ⅠⅡI]*|아랍어[ⅠⅡI]*|베트남어[ⅠⅡI]*|한문[ⅠⅡI]*|"
+    r"진로와직업|철학|심리학|논리학|논술|보건|환경|교육학|종교학|실용경제|"
+    r"창의적체험활동|자율활동|동아리활동|봉사활동|진로활동)"
+)
 SECTION_WORD_RE = re.compile(
     r"평가|계획|방법|기준|유의|목적|방침|결과|활용|시기|절차|수행|개요|목차|성취|기타|운영|배점|"
     r"과제|영역|월|주|차시|단원|내용|안내|참고|비고|서식|양식|첨부|부록"
@@ -502,50 +519,29 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
         if course == subject
     ]
     if matching_headings:
-        position = matching_headings[0]
-        start_index = course_headings[position][0]
-        end_index = len(lines)
-        start_heading = re.match(r"^\s*(#{1,3})\s+", lines[start_index][2])
-        start_level = len(start_heading.group(1)) if start_heading else 3
-        for next_position in range(position + 1, len(course_headings)):
-            line_index, next_course = course_headings[next_position]
-            if next_course != subject:
-                end_index = line_index
-                break
-        # A combined plan can place biology next to English, arts, or a
-        # vocational course.  The canonical list above intentionally knows
-        # only biology, so also stop at a peer-level heading that visibly
-        # opens another course plan.  Without this boundary, a short
-        # ``# 통합과학1`` heading could absorb every following subject.
-        for line_index in range(start_index + 1, end_index):
-            raw = lines[line_index][2]
-            heading = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", raw)
-            if not heading or len(heading.group(1)) > start_level:
-                continue
-            shown = visible_text(heading.group(2))
-            compact = compact_text(shown)
-            if target in compact:
-                continue
-            opens_course_plan = (
-                "교수학습" in compact
-                and "평가" in compact
-                and any(term in compact for term in ("계획", "운영", "방법"))
+        # A cover-sheet cell rendered as ``## 생명과학`` opens a stub section;
+        # try each exact heading and keep the first that holds real content.
+        chosen: tuple[int, int, int] | None = None
+        for position in matching_headings:
+            candidate_start, candidate_end, candidate_level = _exact_section_bounds(
+                lines, course_headings, position, subject, target
             )
-            # ``# 체육`` / ``# 화학`` after ``# 생명과학``: a peer heading as
-            # short as a course name, with none of the words a section inside
-            # one course plan would carry, opens the next course.
-            opens_other_course = (
-                len(heading.group(1)) == start_level
-                and 2 <= len(compact) <= 8
-                and not re.search(r"\d", compact)
-                and not SECTION_WORD_RE.search(compact)
-            )
-            if opens_course_plan or opens_other_course:
-                end_index = line_index
-                break
+            span_end = lines[candidate_end][0] if candidate_end < len(lines) else len(full_text)
+            span = full_text[lines[candidate_start][0]: span_end]
+            if chosen is None or (
+                len(span) >= MIN_SUBJECT_SECTION_CHARS
+                and lines[chosen[1]][0] - lines[chosen[0]][0] < MIN_SUBJECT_SECTION_CHARS
+            ):
+                chosen = (candidate_start, candidate_end, candidate_level)
+                if len(span) >= MIN_SUBJECT_SECTION_CHARS:
+                    break
+        start_index, end_index, _level = chosen
         start = lines[start_index][0]
         end = lines[end_index][0] if end_index < len(lines) else len(full_text)
         return full_text[start:end].strip(), start, end, "subject_heading_exact"
+
+    mentions: list[int] = []
+
 
     mentions: list[int] = []
     heading_mentions: list[int] = []
@@ -604,6 +600,56 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
     start = lines[start_index][0] if lines else 0
     end = lines[end_index][0] if end_index < len(lines) else len(full_text)
     return full_text[start:end].strip(), start, end, status
+
+
+def _exact_section_bounds(
+    lines: list[tuple[int, int, str]],
+    course_headings: list[tuple[int, str]],
+    position: int,
+    subject: str,
+    target: str,
+) -> tuple[int, int, int]:
+    """Start/end line indexes of the section an exact course heading opens."""
+
+    start_index = course_headings[position][0]
+    end_index = len(lines)
+    start_heading = re.match(r"^\s*(#{1,3})\s+", lines[start_index][2])
+    start_level = len(start_heading.group(1)) if start_heading else 3
+    for next_position in range(position + 1, len(course_headings)):
+        line_index, next_course = course_headings[next_position]
+        if next_course != subject:
+            end_index = line_index
+            break
+    # A combined plan can place biology next to English, arts, or a
+    # vocational course.  The canonical list above intentionally knows
+    # only biology, so also stop at a peer-level heading that visibly
+    # opens another course plan.  Without this boundary, a short
+    # ``# 통합과학1`` heading could absorb every following subject.
+    for line_index in range(start_index + 1, end_index):
+        raw = lines[line_index][2]
+        heading = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", raw)
+        if not heading or len(heading.group(1)) > start_level:
+            continue
+        shown = visible_text(heading.group(2))
+        compact = compact_text(shown)
+        if target in compact:
+            continue
+        opens_course_plan = (
+            "교수학습" in compact
+            and "평가" in compact
+            and any(term in compact for term in ("계획", "운영", "방법"))
+        )
+        # ``# 체육`` / ``# 화학`` after ``# 생명과학``: a peer heading as
+        # short as a course name, with none of the words a section inside
+        # one course plan would carry, opens the next course.
+        opens_other_course = (
+            len(heading.group(1)) <= start_level
+            and bool(OTHER_COURSE_HEADING_RE.fullmatch(compact))
+        )
+        if opens_course_plan or opens_other_course:
+            end_index = line_index
+            break
+    return start_index, end_index, start_level
 
 
 def _subject_section_end(lines: list[tuple[int, int, str]], search_from: int, target: str) -> int:
