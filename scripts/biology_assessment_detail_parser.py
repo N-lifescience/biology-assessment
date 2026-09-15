@@ -29,6 +29,8 @@ COURSE_HEADING_MARKERS = (
     "교수학습-평가방법",
     "교수학습및평가방법",
 )
+TOC_LINE_RE = re.compile(r"(?:[·‥…]{3,}|\.{4,})\s*\d{0,4}\s*$|\s\d{1,3}\s*$")
+MIN_SUBJECT_SECTION_CHARS = 400
 ZIP_MEMBER_RE = re.compile(r"^\[zip:(?P<name>.+?)\]\[(?P<status>[^\]]+)\]\s*$", re.I)
 MAX_BOUNDED_ITEMS = 12
 PIPE_SEPARATOR_RE = re.compile(r"\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*")
@@ -237,6 +239,13 @@ STRUCTURAL_EXACT_COMPACT = {
     "통계",
     "벡터",
     "행렬",
+}
+# Sibling code prefixes of the same course across curriculum revisions.
+SUBJECT_CODE_FAMILY = {
+    "통합과학1": ("10통과",),
+    "과학탐구실험1": ("10과탐",),
+    "통합과학": ("10통과1",),
+    "과학탐구실험": ("10과탐1",),
 }
 EXPECTED_STANDARD_PREFIXES = {
     # 2015 개정 과학과
@@ -526,7 +535,8 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
         return full_text[start:end].strip(), start, end, "subject_heading_exact"
 
     mentions: list[int] = []
-    start_index: int | None = None
+    heading_mentions: list[int] = []
+    toc_mentions: list[int] = []
     for index, (_, _, raw) in enumerate(lines):
         shown = visible_text(raw)
         compact = compact_text(shown)
@@ -543,8 +553,27 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
         )
         if course_identity:
             mentions.append(index)
-            if start_index is None and any(marker in compact for marker in COURSE_HEADING_MARKERS):
-                start_index = index
+            if any(marker in compact for marker in COURSE_HEADING_MARKERS):
+                # A table-of-contents entry ("…평가계획 ·········· 55") names
+                # the course but opens nothing; it is tried last.
+                if TOC_LINE_RE.search(shown):
+                    toc_mentions.append(index)
+                else:
+                    heading_mentions.append(index)
+    heading_mentions.extend(toc_mentions)
+    start_index: int | None = None
+    if heading_mentions:
+        # Prefer the first heading whose section is more than a stub: a cover
+        # sheet or a repeated running title can also carry the course name.
+        for candidate in heading_mentions:
+            candidate_end = _subject_section_end(lines, candidate + 1, target)
+            section_stop = lines[candidate_end][0] if candidate_end < len(lines) else len(full_text)
+            section_text = full_text[lines[candidate][0]: section_stop]
+            if len(section_text) >= MIN_SUBJECT_SECTION_CHARS or "<table" in section_text or "\n|" in section_text:
+                start_index = candidate
+                break
+        if start_index is None:
+            start_index = heading_mentions[0]
     if start_index is None:
         if not mentions:
             return full_text, 0, len(full_text), "subject_heading_not_found"
@@ -558,7 +587,13 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
         search_from = start_index + 1
         status = "subject_heading"
 
-    end_index = len(lines)
+    end_index = _subject_section_end(lines, search_from, target)
+    start = lines[start_index][0] if lines else 0
+    end = lines[end_index][0] if end_index < len(lines) else len(full_text)
+    return full_text[start:end].strip(), start, end, status
+
+
+def _subject_section_end(lines: list[tuple[int, int, str]], search_from: int, target: str) -> int:
     for index in range(search_from, len(lines)):
         shown = visible_text(lines[index][2])
         compact = compact_text(shown)
@@ -567,11 +602,8 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
             and 3 <= len(compact) <= 120
             and any(marker in compact for marker in COURSE_HEADING_MARKERS)
         ):
-            end_index = index
-            break
-    start = lines[start_index][0] if lines else 0
-    end = lines[end_index][0] if end_index < len(lines) else len(full_text)
-    return full_text[start:end].strip(), start, end, status
+            return index
+    return len(lines)
 
 
 PROSE_SENTENCE_END_RE = re.compile(r"(?:다|음|함|됨|것|바람)\s*[.。]?\s*$")
@@ -736,11 +768,47 @@ def assessment_block(subject_markdown: str) -> tuple[str, int, int, str]:
         for index in range(len(lines))
         if _introduces_assessment_detail_table(lines, index)
     )
-    if not anchors:
-        return subject_markdown, 0, len(subject_markdown), "assessment_anchor_not_found"
-    best_score = max(score for score, _ in anchors)
-    anchor_index = min(index for score, index in anchors if score == best_score)
-    end_index = len(lines)
+    ranked = sorted(anchors, key=lambda value: (-value[0], value[1]))
+    # Policy prose ("나. 수행평가 … 객관성을 유지한다") outranks nothing when
+    # the block it opens holds no assessment table: try each anchor in score
+    # order and keep the first whose block actually contains one.
+    fallback: tuple[int, int] | None = None
+    for _score, anchor_index in ranked:
+        end_index = _block_end_index(lines, anchor_index)
+        start = lines[anchor_index][0]
+        end = lines[end_index][0] if end_index < len(lines) else len(subject_markdown)
+        block = subject_markdown[start:end]
+        if _has_assessment_table(block):
+            return block.strip(), start, end, "assessment_anchor"
+        if fallback is None:
+            fallback = (start, end)
+    table_index = _first_assessment_table_line(lines)
+    if table_index is not None:
+        anchor_index = table_index
+        for back in range(1, 5):
+            candidate = table_index - back
+            if candidate < 0:
+                break
+            raw = lines[candidate][2]
+            if not raw.strip():
+                continue
+            if _is_source_heading(raw):
+                anchor_index = candidate
+            break
+        end_index = _block_end_index(lines, anchor_index)
+        start = lines[anchor_index][0]
+        end = lines[end_index][0] if end_index < len(lines) else len(subject_markdown)
+        # A block opened by its table rather than by a source heading: good
+        # enough to bound headed items and matrix/rubric tables inside it, but
+        # not evidence enough to publish a bare summary table's titles.
+        return subject_markdown[start:end].strip(), start, end, "assessment_table_anchor"
+    if fallback is not None:
+        start, end = fallback
+        return subject_markdown[start:end].strip(), start, end, "assessment_anchor"
+    return subject_markdown, 0, len(subject_markdown), "assessment_anchor_not_found"
+
+
+def _block_end_index(lines: list[tuple[int, int, str]], anchor_index: int) -> int:
     for index in range(anchor_index + 1, len(lines)):
         raw = lines[index][2]
         if "<" in raw:
@@ -749,11 +817,42 @@ def assessment_block(subject_markdown: str) -> tuple[str, int, int, str]:
         if not BLOCK_END_RE.search(shown):
             continue
         if re.match(r"^(?:#{1,6}\s*)?(?:\|\s*)?(?:\d+|[가-하])\s*[.)|]", raw.strip()):
-            end_index = index
-            break
-    start = lines[anchor_index][0]
-    end = lines[end_index][0] if end_index < len(lines) else len(subject_markdown)
-    return subject_markdown[start:end].strip(), start, end, "assessment_anchor"
+            return index
+    return len(lines)
+
+
+ASSESSMENT_TABLE_MARKER_RE = re.compile(
+    r"성취기준|평가요소|채점기준|평가기준|배점|반영비율|영역만점|평가척도|수행평가"
+)
+
+
+def _has_assessment_table(block: str) -> bool:
+    for _start, _end, fragment in _table_fragments_with_spans(block):
+        if ASSESSMENT_TABLE_MARKER_RE.search(compact_text(visible_text(fragment))):
+            return True
+    return False
+
+
+def _first_assessment_table_line(lines: list[tuple[int, int, str]]) -> int | None:
+    """Line index of the first table that visibly belongs to a performance assessment."""
+
+    for index, (_, _, raw) in enumerate(lines):
+        if not (re.search(r"<table\b", raw, flags=re.I) or (
+            raw.strip().startswith("|") and index + 1 < len(lines)
+            and PIPE_SEPARATOR_RE.fullmatch(lines[index + 1][2])
+        )):
+            continue
+        chunk = _table_after_heading(lines, index - 1) if "<table" in raw.lower() else "\n".join(
+            line[2] for line in lines[index: index + 40]
+        )
+        compact = compact_text(visible_text(chunk))
+        if "수행평가" in compact and (
+            "성취기준" in compact or "평가요소" in compact or "반영비율" in compact or "채점기준" in compact
+        ):
+            return index
+        if ("평가요소" in compact or "채점기준" in compact) and ("배점" in compact or "점수" in compact):
+            return index
+    return None
 
 
 # A meta-label that a <br>-joined source cell appends after the real name.
@@ -1126,6 +1225,17 @@ def segment_subject_alignment(segment: str, subject: str) -> str:
         any(code.startswith(prefix) for prefix in expected_prefixes) for code in codes
     ):
         return "expected"
+    # A 2022 course plan often abbreviates its own codes in the 2015 shape
+    # ("이외 [10통과01-02~04]" next to "[10통과1-01-01]").  Once at least one
+    # code names the requested course exactly, its curriculum-family sibling
+    # codes are the same course, not another subject.
+    family = tuple(subject_code_key(prefix) for prefix in SUBJECT_CODE_FAMILY.get(subject, ()))
+    if codes and family and any(
+        any(code.startswith(prefix) for prefix in expected_prefixes) for code in codes
+    ) and all(
+        any(code.startswith(prefix) for prefix in expected_prefixes + family) for code in codes
+    ):
+        return "expected"
     # An explicit achievement-standard code is stronger boundary evidence than
     # a short subject-name mention.  If the code cannot confirm the requested
     # biology course, keep the section out of the public catalogue even
@@ -1324,6 +1434,104 @@ def _markdown_pipe_table_fragments(value: str) -> list[str]:
             index += 1
         fragments.append("\n".join(lines[start:index]))
     return fragments
+
+
+class _SpanTableExtractor(StdlibHTMLParser):
+    """Collect top-level table cells with their rowspan/colspan (nested tables flatten to text)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[tuple[str, int, int]]]] = []
+        self._depth = 0
+        self._rows: list[list[tuple[str, int, int]]] = []
+        self._cell: list[str] | None = None
+        self._span = (1, 1)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag == "table":
+            self._depth += 1
+            if self._depth == 1:
+                self._rows = []
+        elif self._depth == 1 and tag == "tr":
+            self._rows.append([])
+        elif self._depth == 1 and tag in ("td", "th") and self._rows:
+            values = {name.lower(): (value or "") for name, value in attrs}
+            self._cell = []
+            self._span = (
+                max(1, int(values.get("rowspan") or 1) if str(values.get("rowspan") or "1").isdigit() else 1),
+                max(1, int(values.get("colspan") or 1) if str(values.get("colspan") or "1").isdigit() else 1),
+            )
+        elif tag == "br" and self._cell is not None:
+            self._cell.append(" ")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "br" and self._cell is not None:
+            self._cell.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if self._depth == 1 and tag in ("td", "th") and self._cell is not None and self._rows:
+            self._rows[-1].append(("".join(self._cell).strip(), *self._span))
+            self._cell = None
+        elif tag == "table":
+            if self._depth == 1 and self._rows:
+                self.tables.append(self._rows)
+            self._depth = max(0, self._depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def _expand_spans(rows: list[list[tuple[str, int, int]]]) -> list[list[str]]:
+    """Expand rowspan/colspan into a rectangular grid, repeating the spanning cell's text."""
+
+    grid: list[list[str]] = []
+    carry: dict[int, tuple[str, int]] = {}
+    for row in rows:
+        out: list[str] = []
+        col = 0
+        cells = iter(row)
+        cell = next(cells, None)
+        while cell is not None or any(key >= col for key in carry):
+            if col in carry:
+                text, remaining = carry[col]
+                out.append(text)
+                if remaining > 1:
+                    carry[col] = (text, remaining - 1)
+                else:
+                    del carry[col]
+                col += 1
+                continue
+            if cell is None:
+                break
+            text, rowspan, colspan = cell
+            for offset in range(colspan):
+                out.append(text)
+                if rowspan > 1:
+                    carry[col + offset] = (text, rowspan - 1)
+            col += colspan
+            cell = next(cells, None)
+        grid.append(out)
+    return grid
+
+
+@lru_cache(maxsize=64)
+def _grid_tables(value: str) -> list[list[list[str]]]:
+    """Like ``_source_tables`` but with rowspan/colspan expanded so columns line up."""
+
+    extractor = _SpanTableExtractor()
+    extractor.feed(value)
+    extractor.close()
+    tables = [_expand_spans(rows) for rows in extractor.tables]
+    for fragment in _markdown_pipe_table_fragments(value):
+        rows = fragment.splitlines()
+        parsed = [_split_pipe_row(rows[0])]
+        parsed.extend(_split_pipe_row(row) for row in rows[2:])
+        if parsed:
+            tables.append(parsed)
+    return tables
 
 
 @lru_cache(maxsize=64)
@@ -1617,7 +1825,7 @@ def _matrix_table_items(
     output: list[ParsedAssessmentItem] = []
     seen: set[str] = set()
     for start, end, fragment in _table_fragments_with_spans(value):
-        tables = _source_tables(fragment)
+        tables = _grid_tables(fragment)
         if not tables:
             continue
         rows = tables[0]
@@ -1628,11 +1836,14 @@ def _matrix_table_items(
                 continue
             first = compact_text(row[0])
             row_labels = [compact_text(cell) for cell in row]
-            if first in {"평가종류", "평가구분", "구분"} and any(
+            if first in {"평가종류", "평가구분", "구분", "평가유형", "평가", "유형", "평가방법"} and any(
                 "수행평가" in label for label in row_labels[1:]
             ):
                 category_row = row
-            if first in {"평가영역", "평가영역명", "평가내용", "수행평가명", "과제명"}:
+            if title_row is None and first in {
+                "평가영역", "평가영역명", "평가내용", "수행평가명", "과제명", "횟수영역", "영역",
+                "수행평가영역", "영역명", "평가명", "평가과제", "수행과제", "횟수및영역", "영역횟수",
+            }:
                 title_row = row
         if category_row is None or title_row is None:
             continue
@@ -1686,6 +1897,103 @@ def _matrix_table_items(
                     source_markdown=source_html,
                     source_html=source_html,
                     rubric_html=rubric_html,
+                    overview=str(fields["overview"]),
+                    method=str(fields["method"]),
+                    timing=str(fields["timing"]),
+                    score=str(fields["score"]),
+                    weight=str(fields["weight"]),
+                    standards=tuple(str(item) for item in fields["standards"]),
+                )
+            )
+            seen.add(key)
+    return output
+
+
+RUBRIC_GROUP_TITLE_LABEL_RE = re.compile(
+    r"^(?:수행평가(?:내용|명|영역|과제)?|평가(?:영역|내용|명|과제|항목)|영역(?:명)?|과제명|수행과제)$"
+)
+
+
+def _rubric_group_table_items(
+    value: str,
+    subject: str,
+    subject_status: str,
+    source_offset: int,
+) -> list[ParsedAssessmentItem]:
+    """Split one rubric table whose first column names each assessment.
+
+    대구·서울 plans publish a single 세부 기준 table: ``수행평가 내용 | 평가요소
+    | 채점기준 | 점수`` with a rowspan per assessment.  With spans expanded,
+    every row carries its assessment name in column 0, so the rows group into
+    one item per name, each keeping only its own rubric rows.
+    """
+
+    boundary_reliable = subject_status in {
+        "subject_heading",
+        "subject_heading_exact",
+        "zip_member_subject",
+    }
+    output: list[ParsedAssessmentItem] = []
+    seen: set[str] = set()
+    for start, end, fragment in _table_fragments_with_spans(value):
+        tables = _grid_tables(fragment)
+        if not tables or len(tables[0]) < 3:
+            continue
+        rows = tables[0]
+        header = [compact_text(visible_text(cell)) for cell in rows[0]]
+        if not header or not RUBRIC_GROUP_TITLE_LABEL_RE.match(header[0]):
+            continue
+        if not any(re.search(r"채점기준|평가기준|평가척도|수행수준", cell) for cell in header[1:]):
+            continue
+        if not any(re.search(r"점수|배점", cell) for cell in header[1:]):
+            continue
+        groups: dict[str, list[list[str]]] = {}
+        order: list[str] = []
+        for row in rows[1:]:
+            if not row:
+                continue
+            title = visible_text(row[0]).strip()
+            key = compact_text(title)
+            if not key:
+                continue
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(row)
+        titles = {key: visible_text(groups[key][0][0]).strip() for key in order}
+        candidates = [
+            key for key in order
+            if len(groups[key]) >= 2 and _valid_plan_title(titles[key])
+            and not is_rubric_criterion_sentence(titles[key])
+        ]
+        if len(candidates) < 1 or len(candidates) > MAX_BOUNDED_ITEMS:
+            continue
+        alignment = segment_subject_alignment(fragment, subject)
+        if alignment == "other" or (alignment == "unknown" and not boundary_reliable):
+            continue
+        for key in candidates:
+            if key in seen:
+                continue
+            title = strip_title_decoration(titles[key])
+            body = "".join(
+                "<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in row) + "</tr>"
+                for row in groups[key]
+            )
+            head = "<tr>" + "".join(f"<th>{html.escape(visible_text(cell))}</th>" for cell in rows[0]) + "</tr>"
+            table_html = f"<table>{head}{body}</table>"
+            fields = _exact_fields(table_html)
+            output.append(
+                ParsedAssessmentItem(
+                    order=len(output) + 1,
+                    title=title,
+                    title_raw=title,
+                    title_basis="table",
+                    extraction_status="bounded",
+                    source_start=source_offset + start,
+                    source_end=source_offset + end,
+                    source_markdown=table_html,
+                    source_html=table_html,
+                    rubric_html=table_html,
                     overview=str(fields["overview"]),
                     method=str(fields["method"]),
                     timing=str(fields["timing"]),
@@ -2419,11 +2727,17 @@ def parse_assessment_section(
         subject_start,
         title_hints,
     )
+    rubric_group_items = _rubric_group_table_items(
+        subject_markdown,
+        subject,
+        subject_status,
+        subject_start,
+    )
     allow_bounded_items = bool(
         headings
         and len(headings) <= MAX_BOUNDED_ITEMS
         and subject_status != "subject_heading_not_found"
-        and block_status == "assessment_anchor"
+        and block_status in {"assessment_anchor", "assessment_table_anchor"}
     )
     items: list[ParsedAssessmentItem] = []
     if allow_bounded_items:
@@ -2521,7 +2835,7 @@ def parse_assessment_section(
             for item in items
             if item.extraction_status == "bounded"
         }
-        for extras in (table_items, local_table_items, matrix_items, hinted_items):
+        for extras in (table_items, local_table_items, matrix_items, hinted_items, rubric_group_items):
             accepted = [
                 item
                 for item in extras
@@ -2537,8 +2851,8 @@ def parse_assessment_section(
                 for item in global_table_items
                 if compact_text(item.title) not in existing_titles
             )
-    elif table_items or local_table_items or matrix_items or hinted_items:
-        for item in [*table_items, *local_table_items, *matrix_items, *hinted_items]:
+    elif table_items or local_table_items or matrix_items or hinted_items or rubric_group_items:
+        for item in [*table_items, *local_table_items, *matrix_items, *hinted_items, *rubric_group_items]:
             if compact_text(item.title) not in {
                 compact_text(existing.title) for existing in items
             }:
