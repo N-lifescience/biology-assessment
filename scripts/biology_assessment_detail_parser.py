@@ -29,6 +29,10 @@ COURSE_HEADING_MARKERS = (
     "교수학습-평가방법",
     "교수학습및평가방법",
 )
+SECTION_WORD_RE = re.compile(
+    r"평가|계획|방법|기준|유의|목적|방침|결과|활용|시기|절차|수행|개요|목차|성취|기타|운영|배점|"
+    r"과제|영역|월|주|차시|단원|내용|안내|참고|비고|서식|양식|첨부|부록"
+)
 TOC_LINE_RE = re.compile(r"(?:[·‥…]{3,}|\.{4,})\s*\d{0,4}\s*$|\s\d{1,3}\s*$")
 MIN_SUBJECT_SECTION_CHARS = 400
 ZIP_MEMBER_RE = re.compile(r"^\[zip:(?P<name>.+?)\]\[(?P<status>[^\]]+)\]\s*$", re.I)
@@ -527,7 +531,16 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
                 and "평가" in compact
                 and any(term in compact for term in ("계획", "운영", "방법"))
             )
-            if opens_course_plan:
+            # ``# 체육`` / ``# 화학`` after ``# 생명과학``: a peer heading as
+            # short as a course name, with none of the words a section inside
+            # one course plan would carry, opens the next course.
+            opens_other_course = (
+                len(heading.group(1)) == start_level
+                and 2 <= len(compact) <= 8
+                and not re.search(r"\d", compact)
+                and not SECTION_WORD_RE.search(compact)
+            )
+            if opens_course_plan or opens_other_course:
                 end_index = line_index
                 break
         start = lines[start_index][0]
@@ -789,7 +802,7 @@ def assessment_block(subject_markdown: str) -> tuple[str, int, int, str]:
         start = lines[anchor_index][0]
         end = lines[end_index][0] if end_index < len(lines) else len(subject_markdown)
         block = subject_markdown[start:end]
-        if _has_assessment_table(block):
+        if _has_assessment_table(block) or _heading_candidates(block):
             return block.strip(), start, end, "assessment_anchor"
         if fallback is None:
             fallback = (start, end)
@@ -1061,6 +1074,8 @@ def heading_is_policy_prose(title: str) -> bool:
 def _valid_title(title: str) -> bool:
     compact = compact_text(title)
     if not 2 <= len(compact) <= 100:
+        return False
+    if NON_ASSESSMENT_TITLE_RE.search(compact):
         return False
     if GENERIC_TITLE_RE.fullmatch(title) or re.fullmatch(r"[0-9점%./~\s]+", title):
         return False
@@ -1876,6 +1891,8 @@ def _matrix_table_items(
             key = compact_text(candidate)
             if not key or key in seen or not _valid_plan_title(candidate):
                 continue
+            if NON_ASSESSMENT_TITLE_RE.search(key) or heading_title_is_structural(candidate):
+                continue
             pairs: list[tuple[str, str]] = []
             for row in rows:
                 if not row or column >= len(row):
@@ -1926,6 +1943,10 @@ def _matrix_table_items(
     return output
 
 
+# Cells that name a form or a plan attribute, never an assessment.
+NON_ASSESSMENT_TITLE_RE = re.compile(
+    r"담당교사|학점|시수|^\d+시간$|양식$|척도안$|척도및배점|^배점|^평가척도|^채점기준|^기본점수|^합계$|^총점"
+)
 RUBRIC_GROUP_TITLE_LABEL_RE = re.compile(
     r"^(?:수행평가(?:내용|명|영역|과제)?|평가(?:영역|내용|명|과제|항목)|영역(?:명)?|과제명|수행과제)$"
 )
@@ -1982,11 +2003,18 @@ def _rubric_group_table_items(
             key for key in order
             if len(groups[key]) >= 2 and _valid_plan_title(titles[key])
             and not is_rubric_criterion_sentence(titles[key])
+            and not heading_title_is_structural(titles[key])
+            and not NON_ASSESSMENT_TITLE_RE.search(compact_text(titles[key]))
         ]
         if len(candidates) < 1 or len(candidates) > MAX_BOUNDED_ITEMS:
             continue
         alignment = segment_subject_alignment(fragment, subject)
         if alignment == "other" or (alignment == "unknown" and not boundary_reliable):
+            continue
+        # A rubric table carries no achievement codes of its own; the codes
+        # around it say whose table it is.
+        context = value[max(0, start - 2000): end + 400]
+        if foreign_subject_codes(unicodedata.normalize("NFC", visible_text(context))):
             continue
         for key in candidates:
             if key in seen:
@@ -2704,6 +2732,12 @@ def _rubric_html(segment: str) -> str:
     return balance_table_tags("\n".join(tables))
 
 
+def _title_key(title: str) -> str:
+    """Dedup key: the same task listed with and without a trailing "(1회)" is one task."""
+
+    return compact_text(re.sub(r"\(\s*\d+\s*회\s*\)", "", title))
+
+
 def parse_assessment_section(
     full_text: str,
     subject: str,
@@ -2715,6 +2749,11 @@ def parse_assessment_section(
     block, block_start, block_end, block_status = assessment_block(subject_markdown)
     headings = _heading_candidates(block)
     plan_titles = _plan_titles(subject_markdown)
+    # A block opened by its table (no source heading) may still hold detail
+    # tables worth reading; a bare summary table on its own is not enough.
+    detail_evidence = "<table" in block.lower() and bool(
+        re.search(r"채점\s*기준|평가\s*요소|성취\s*기준", block)
+    )
     table_items = (
         _summary_table_items(
             block,
@@ -2723,6 +2762,7 @@ def parse_assessment_section(
             subject_start + block_start,
         )
         if block_status == "assessment_anchor"
+        or (block_status == "assessment_table_anchor" and detail_evidence)
         else []
     )
     local_table_items = _explicit_local_table_items(
@@ -2848,7 +2888,7 @@ def parse_assessment_section(
                 )
             )
         existing_titles = {
-            compact_text(item.title)
+            _title_key(item.title)
             for item in items
             if item.extraction_status == "bounded"
         }
@@ -2856,11 +2896,11 @@ def parse_assessment_section(
             accepted = [
                 item
                 for item in extras
-                if compact_text(item.title) not in existing_titles
+                if _title_key(item.title) not in existing_titles
                 and not _already_read_under_a_heading(items, item)
             ]
             items.extend(accepted)
-            existing_titles.update(compact_text(item.title) for item in extras)
+            existing_titles.update(_title_key(item.title) for item in extras)
         if not any(item.extraction_status == "bounded" for item in items):
             global_table_items = _expected_code_table_items(full_text, subject)
             items.extend(
@@ -2870,9 +2910,7 @@ def parse_assessment_section(
             )
     elif table_items or local_table_items or matrix_items or hinted_items or rubric_group_items:
         for item in [*table_items, *local_table_items, *matrix_items, *hinted_items, *rubric_group_items]:
-            if compact_text(item.title) not in {
-                compact_text(existing.title) for existing in items
-            }:
+            if _title_key(item.title) not in {_title_key(existing.title) for existing in items}:
                 items.append(item)
     else:
         global_table_items = _expected_code_table_items(full_text, subject)
