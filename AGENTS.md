@@ -36,3 +36,16 @@
 - 화면 층 수정은 전 항목 jsdom 감사로 효과를 잰다(`npm run audit:renderer`는 예외만 세고,
   라벨 오분류 같은 품질 지표는 별도 스크립트로 센다).
 - 2학기(정시 3차) 원문 수집과 맥 추출 절차는 README "2학기 공시 갱신 절차"를 따른다.
+
+# 파서 품질 작업 절차 (2026-09-15)
+
+- 색인: `python scripts/index_evidence_source.py --evidence-source <6GB jsonl> --output data/derived/evidence_source_offsets.json`
+  (한 번만). 이후 `scripts/case_text.py`·`scripts/dump_case_block.py <case_id>` 로 사례 원문을 즉시 연다.
+- 재평가: `python scripts/evaluate_parser_sample.py --output data/derived/parser_eval_vN.jsonl`
+  (7,211건 약 45분). 발행 DB 대비 사례별 확정 항목 수의 gain/loss 를 낸다. **loss 는 하나씩 열어 본다.**
+- 양식 군집: `python scripts/profile_source_templates.py …` 로 표 구조 지문을 뽑고
+  `python scripts/report_template_clusters.py --signatures … --evaluation …` 로 군집별 전후 실패율을 본다.
+  교육청 이름이 아니라 구조 지문으로 나눈다. 같은 교육청 안에서도 학교가 손본 변형이 있다.
+- 파서 변경은 반드시 `services/biology-assessment-api/tests/test_detail_parser.py` 에 실제 문서 모양의
+  골든 테스트를 함께 넣는다.
+
