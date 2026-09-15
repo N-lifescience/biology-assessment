@@ -1511,3 +1511,104 @@ def test_timing_keeps_a_real_schedule_value() -> None:
     item = parse_assessment_section(source, "통합과학1").items[0]
 
     assert item.timing == "4월 1주~4월 2주"
+
+
+def test_table_of_contents_entry_does_not_open_the_subject_section() -> None:
+    source = """
+    2026_1학기_1학년_과학탐구실험1_교수학습 및 평가계획(정보공시) ··········· 55
+    2026_1학기_1학년_통합과학1_교수학습 및 평가계획(정보공시) ··········· 61
+
+    # 2026학년도 1학기 [과학탐구실험1] 교수학습 및 평가 운영 계획
+    ## 수행평가 세부 계획
+    ### 1. 패러다임의 전환 탐구
+    <table>
+      <tr><th>성취기준</th><td>[10과탐1-01-01] 결정적 실험을 따라 할 수 있다</td></tr>
+      <tr><th>평가요소</th><th>채점기준</th><th>배점</th></tr>
+      <tr><td>실험 수행</td><td>절차에 따라 수행함</td><td>10</td></tr>
+    </table>
+    """
+
+    section = parse_assessment_section(source, "과학탐구실험1")
+
+    assert section.boundary_status.startswith("subject_heading")
+    assert [item.title for item in section.items if item.extraction_status == "bounded"] == [
+        "패러다임의 전환 탐구"
+    ]
+
+
+def test_policy_paragraph_anchor_yields_to_the_block_with_tables() -> None:
+    source = """
+    # 2026학년도 (생명과학) 교수학습 및 평가 운영 계획
+    ## 2. 평가 방침
+    나. 수행평가
+    1) 수행평가의 내용과 평가척도 및 배점은 학생들에게 미리 제시하여 평가의 객관성을 유지한다.
+    2) 결시자의 성적 처리는 학업성적관리규정에 따른다.
+    ## 3. 수행평가 세부 계획
+    ### 가. 생명 활동 유지 탐구
+    <table>
+      <tr><th>성취기준</th><td>[12생과01-01] 세포를 설명할 수 있다</td></tr>
+      <tr><th>평가요소</th><th>채점기준</th><th>배점</th></tr>
+      <tr><td>탐구</td><td>근거가 타당함</td><td>10</td></tr>
+    </table>
+    """
+
+    section = parse_assessment_section(source, "생명과학")
+
+    assert [item.title for item in section.items if item.extraction_status == "bounded"] == [
+        "생명 활동 유지 탐구"
+    ]
+
+
+def test_matrix_summary_with_colspan_reads_the_performance_columns() -> None:
+    source = """
+    # 2026학년도 [1]학년 1학기 [통합과학1] 교수학습 및 평가 계획
+    Ⅲ. 평가 기준
+    <table>
+    <tr><th>평가종류</th><th colspan="2">정기시험</th><th colspan="2">수행평가</th></tr>
+    <tr><td rowspan="2">영역</td><td>중간고사</td><td>기말고사</td>
+    <td rowspan="2">전기전도성 탐구</td><td rowspan="2">DNA 모형 제작</td></tr>
+    <tr><td>선택형</td><td>서답형</td></tr>
+    <tr><td>반영비율</td><td>30%</td><td>30%</td><td>20%</td><td>20%</td></tr>
+    <tr><td>성취기준</td><td>-</td><td>-</td><td>[10통과1-02-03]</td><td>[10통과1-02-05]</td></tr>
+    <tr><td>평가요소</td><td>-</td><td>-</td><td>전기전도성 측정</td><td>모형 제작</td></tr>
+    <tr><td>평가시기</td><td>4월</td><td>7월</td><td>5월</td><td>6월</td></tr>
+    </table>
+    """
+
+    section = parse_assessment_section(source, "통합과학1")
+
+    titles = [item.title for item in section.items if item.extraction_status == "bounded"]
+    assert titles == ["전기전도성 탐구", "DNA 모형 제작"]
+    assert "중간고사" not in titles
+
+
+def test_single_rubric_table_grouped_by_assessment_name_splits_into_items() -> None:
+    source = """
+    # 2026학년도 [과학탐구실험] 교수학습 및 평가 계획
+    2. 수행평가 세부 기준안
+    <table>
+    <tr><th>수행평가 내용</th><th>평가요소(배점)</th><th>채점기준</th><th>점수</th></tr>
+    <tr><td rowspan="3">과학 원리 탐구</td><td rowspan="3">탐구 능력</td>
+    <td>2개 항목을 모두 갖추었다.</td><td>20</td></tr>
+    <tr><td>1개 항목을 갖추었다.</td><td>10</td></tr>
+    <tr><td>제출하지 않았다.</td><td>0</td></tr>
+    <tr><td rowspan="2">생활 주변 탐구</td><td rowspan="2">문제 해결력</td>
+    <td>3개 항목을 모두 갖추었다.</td><td>40</td></tr>
+    <tr><td>제출하지 않았다.</td><td>0</td></tr>
+    </table>
+    """
+
+    section = parse_assessment_section(source, "과학탐구실험")
+
+    bounded = [item for item in section.items if item.extraction_status == "bounded"]
+    assert [item.title for item in bounded] == ["과학 원리 탐구", "생활 주변 탐구"]
+    assert "2개 항목을 모두 갖추었다" in bounded[0].rubric_html
+    assert "3개 항목" not in bounded[0].rubric_html
+
+
+def test_abbreviated_sibling_codes_do_not_count_as_another_subject() -> None:
+    segment = "[10통과1-01-01] 자연을 기술할 수 있다. 이외 [10통과01-02~04], [10통과02-01~06]"
+
+    assert segment_subject_alignment(segment, "통합과학1") == "expected"
+    assert segment_subject_alignment("[10통과01-02] 만 있는 구간", "통합과학1") == "other"
+
