@@ -1612,3 +1612,35 @@ def test_abbreviated_sibling_codes_do_not_count_as_another_subject() -> None:
     assert segment_subject_alignment(segment, "통합과학1") == "expected"
     assert segment_subject_alignment("[10통과01-02] 만 있는 구간", "통합과학1") == "other"
 
+
+def test_bracketed_per_course_h1_bounds_the_subject_section() -> None:
+    source = """
+    # 2026학년도 1학기 (과학탐구실험1)과 교수학습 계획서
+    | 학년 | 담당 |
+    | --- | --- |
+    | 1학년 | 김○○ |
+    # 평가 계획
+    <table>
+    <tr><th>평가 유형</th><th colspan="2">수행평가</th><th>합계</th></tr>
+    <tr><td>반영 비율</td><td colspan="2">100%</td><td>100%</td></tr>
+    <tr><td>횟수/영역</td><td>패러다임의 전환을 만화로 표현하기</td>
+    <td>생활 속의 과학 탐구</td><td>-</td></tr>
+    <tr><td>평가 방법</td><td>프로젝트</td><td>실험·실습</td><td>-</td></tr>
+    <tr><td>교육과정 성취 기준</td><td>[10과탐1-01-01]</td><td>[10과탐1-02-01]</td><td>-</td></tr>
+    <tr><td>평가 시기</td><td>3~4월</td><td>5~7월</td><td>-</td></tr>
+    </table>
+    # 2026학년도 1학기 (체육1)과 교수학습 계획서
+    <table>
+    <tr><th>평가 유형</th><th colspan="2">수행평가</th><th>합계</th></tr>
+    <tr><td>횟수/영역</td><td>등반</td><td>건강 관리</td><td>-</td></tr>
+    <tr><td>교육과정 성취 기준</td><td>[12체육01-01]</td><td>[12체육01-02]</td><td>-</td></tr>
+    </table>
+    """
+
+    section = parse_assessment_section(source, "과학탐구실험1")
+
+    assert section.boundary_status.startswith("subject_heading:")
+    titles = [item.title for item in section.items if item.extraction_status == "bounded"]
+    assert titles == ["패러다임의 전환을 만화로 표현하기", "생활 속의 과학 탐구"]
+    assert "등반" not in section.source_markdown
+
