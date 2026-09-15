@@ -553,7 +553,7 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
         )
         if course_identity:
             mentions.append(index)
-            if any(marker in compact for marker in COURSE_HEADING_MARKERS):
+            if any(marker in compact for marker in COURSE_HEADING_MARKERS) or _bracketed_course_h1(raw, shown):
                 # A table-of-contents entry ("…평가계획 ·········· 55") names
                 # the course but opens nothing; it is tried last.
                 if TOC_LINE_RE.search(shown):
@@ -595,15 +595,26 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
 
 def _subject_section_end(lines: list[tuple[int, int, str]], search_from: int, target: str) -> int:
     for index in range(search_from, len(lines)):
-        shown = visible_text(lines[index][2])
+        raw = lines[index][2]
+        shown = visible_text(raw)
         compact = compact_text(shown)
-        if (
-            target not in compact
-            and 3 <= len(compact) <= 120
-            and any(marker in compact for marker in COURSE_HEADING_MARKERS)
-        ):
+        if target in compact or not 3 <= len(compact) <= 120:
+            continue
+        if any(marker in compact for marker in COURSE_HEADING_MARKERS) or _bracketed_course_h1(raw, shown):
             return index
     return len(lines)
+
+
+BRACKETED_COURSE_RE = re.compile(r"[\[(（]\s*[가-힣ⅠⅡ0-9A-Za-z·\s]{2,20}\s*[\])）]\s*(?:과|교과)?")
+
+
+def _bracketed_course_h1(raw: str, shown: str) -> bool:
+    """``# 2026학년도 1학기 (체육1)과 교수학습 계획서``: a per-course H1 in a combined plan."""
+
+    if not re.match(r"^\s*#\s", raw):
+        return False
+    compact = compact_text(shown)
+    return bool(BRACKETED_COURSE_RE.search(shown)) and ("교수학습" in compact or "평가계획" in compact)
 
 
 PROSE_SENTENCE_END_RE = re.compile(r"(?:다|음|함|됨|것|바람)\s*[.。]?\s*$")
@@ -1836,10 +1847,16 @@ def _matrix_table_items(
                 continue
             first = compact_text(row[0])
             row_labels = [compact_text(cell) for cell in row]
-            if first in {"평가종류", "평가구분", "구분", "평가유형", "평가", "유형", "평가방법"} and any(
-                "수행평가" in label for label in row_labels[1:]
+            if (
+                category_row is None
+                and (
+                    first in {"구분", "평가", "유형"}
+                    or first.startswith(("평가종류", "평가구분", "평가유형", "평가방법", "반영비율", "평가종류및"))
+                )
+                and any("수행평가" in label for label in row_labels[1:])
             ):
                 category_row = row
+                continue
             if title_row is None and first in {
                 "평가영역", "평가영역명", "평가내용", "수행평가명", "과제명", "횟수영역", "영역",
                 "수행평가영역", "영역명", "평가명", "평가과제", "수행과제", "횟수및영역", "영역횟수",
