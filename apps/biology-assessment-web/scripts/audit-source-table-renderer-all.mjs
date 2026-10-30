@@ -1,14 +1,11 @@
 #!/usr/bin/env node
-// Regression gate for app/lib/source-table-segmentation.ts.
+// Regression gate for app/lib/source-html.ts.
 //
-// The renderer rewrites converter-mangled source tables with DOM surgery
-// (rowspan clamping, page-break merges, column pruning). A single row whose
-// markup violates an assumption throws in the browser and blanks the detail
-// page, so every published row is put through it here before a deploy.
+// Every published source HTML payload must pass through the allowlist sanitizer
+// without throwing. This measures exceptions, not source extraction quality.
 //
-// ponytail: no new dependency. Node 24 imports the .ts renderer directly
-// (type stripping) and node:sqlite reads the publish DB; jsdom is already a
-// devDependency and supplies the DOM the renderer expects.
+// Node imports the .ts renderer directly (type stripping); node:sqlite reads
+// the publish DB. No DOM globals are installed, so this also exercises SSR.
 //
 // Usage:
 //   node apps/biology-assessment-web/scripts/audit-source-table-renderer-all.mjs
@@ -19,7 +16,7 @@ import { inflateSync } from "node:zlib";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { JSDOM } from "jsdom";
+import { prepareSourceHtml } from "../app/lib/source-html.ts";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(SCRIPT_DIRECTORY, "..", "..", "..");
@@ -34,24 +31,12 @@ function argument(name) {
   return index === -1 ? null : process.argv[index + 1];
 }
 
-// The renderer is browser code: give it a real DOM before importing it, or its
-// `typeof DOMParser === "undefined"` guard would make every row trivially pass.
-const window = new JSDOM("<!doctype html><body></body>").window;
-for (const name of ["DOMParser", "HTMLTableElement", "HTMLTableCellElement", "Node"]) {
-  globalThis[name] = window[name];
-}
-if (typeof globalThis.DOMParser === "undefined") {
-  throw new Error("DOM setup failed: the renderer would no-op and pass every row");
-}
-
-const { segmentSourceTables } = await import("../app/lib/source-table-segmentation.ts");
-
 /** Decompress one archived HTML blob and run it through the renderer. */
 function auditItem(itemId, blob) {
   try {
     const html = inflateSync(blob).toString("utf8");
-    const result = segmentSourceTables(html);
-    if (typeof result?.html !== "string") {
+    const result = prepareSourceHtml(html);
+    if (typeof result !== "string") {
       throw new TypeError(`renderer returned no html for ${itemId}`);
     }
     return null;
@@ -131,4 +116,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`source table renderer audit ok: ${audited} bounded item(s) segmented cleanly`);
+console.log(`source table renderer audit ok: ${audited} bounded item(s) prepared; 0 exceptions`);
