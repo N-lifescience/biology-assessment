@@ -103,7 +103,7 @@ export default function CaseDetailViewer({
       <header className="sourceDetailHeader">
         <div>
           <p className="breadcrumb"><Link href="/cases">수행평가 라이브러리</Link><span>/</span>원문 상세</p>
-          <div className="caseBadges"><span>{caseItem.curriculum === "shared" ? "교육과정 유보" : `${caseItem.curriculum} 개정`}</span><span>{caseItem.subject}</span><span>{caseItem.region || "지역 미확인"}</span>{hasSafetyEthicsNotice(caseItem) ? <span className="safetyNoticeBadge" title="해부·채집·시약 등 안전과 생명윤리 확인이 필요한 표현이 원문에 있습니다.">안전·윤리 주의</span> : null}</div>
+          <div className="caseBadges"><span>{caseItem.curriculum === "shared" ? "교육과정 유보" : `${caseItem.curriculum} 개정`}</span><span>{caseItem.subject}</span><span>{caseItem.disclosure_semester}학기</span><span>{caseItem.region || "지역 미확인"}</span>{hasSafetyEthicsNotice(caseItem) ? <span className="safetyNoticeBadge" title="해부·채집·시약 등 안전과 생명윤리 확인이 필요한 표현이 원문에 있습니다.">안전·윤리 주의</span> : null}</div>
           <h1>{caseItem.school_name}</h1>
           <p>{caseItem.source_name}</p>
         </div>

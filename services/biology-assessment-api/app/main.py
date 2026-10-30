@@ -225,11 +225,13 @@ def cases(
     include_ambiguous: bool = True,
     limit: Annotated[int, Query(ge=1, le=30)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    semester: Annotated[str | None, Query(pattern="^[12]$")] = None,
 ) -> dict[str, object]:
     require_region_for_district(region, district)
     items, total = ready_detail_repository().cases(
         curriculum=curriculum,
         subject=subject,
+        semester=semester,
         tag=tag,
         region=region,
         district=district,
@@ -260,12 +262,14 @@ def curated_cases(
     district: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     topic: Annotated[str | None, Query(pattern=CURATED_TOPIC_PATTERN)] = None,
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
+    semester: Annotated[str | None, Query(pattern="^[12]$")] = None,
 ) -> dict[str, object]:
     require_region_for_district(region, district)
     catalog = ready_detail_repository()
     items = catalog.curated_items(
         curriculum=curriculum,
         subject=subject,
+        semester=semester,
         region=region,
         district=district,
         category=category,
@@ -279,6 +283,7 @@ def curated_cases(
         "total": catalog.curated_total(
             curriculum=curriculum,
             subject=subject,
+            semester=semester,
             region=region,
             district=district,
             category=category,
@@ -306,12 +311,14 @@ def references(
     # 한 조합의 사례는 수백 건이 되기도 한다. 상위 몇 건만 보여주면 그 아래가
     # 있는지조차 알 수 없으므로 페이지 단위로 끝까지 넘겨볼 수 있게 한다.
     offset: Annotated[int, Query(ge=0)] = 0,
+    semester: Annotated[str | None, Query(pattern="^[12]$")] = None,
 ) -> dict[str, object]:
     require_region_for_district(region, district)
     catalog = ready_detail_repository()
     items = catalog.curated_items(
         curriculum=curriculum,
         subject=subject,
+        semester=semester,
         region=region,
         district=district,
         category=category,
@@ -325,8 +332,11 @@ def references(
         "facets": catalog.curated_facets(
             curriculum=curriculum,
             subject=subject,
+            semester=semester,
             region=region,
             category=category,
+            district=district,
+            topic=topic,
         ),
         "category": category,
         "topic": topic or "",
@@ -334,6 +344,7 @@ def references(
         "total": catalog.curated_total(
             curriculum=curriculum,
             subject=subject,
+            semester=semester,
             region=region,
             district=district,
             category=category,
@@ -351,8 +362,17 @@ def facets(
     curriculum: Annotated[str | None, Query(pattern="^(2015|2022)$")] = None,
     subject: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
     region: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
+    semester: Annotated[str | None, Query(pattern="^[12]$")] = None,
+    district: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
+    tag: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
+    query: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
+    include_ambiguous: bool = True,
 ) -> dict[str, object]:
-    return ready_detail_repository().facets(curriculum, subject, region)
+    require_region_for_district(region, district)
+    return ready_detail_repository().facets(
+        curriculum, subject, region, semester, district=district, tag=tag,
+        query=query, include_ambiguous=include_ambiguous,
+    )
 
 
 @app.get("/api/v1/cases/{case_id}", response_model=CaseItem, tags=["catalog"])

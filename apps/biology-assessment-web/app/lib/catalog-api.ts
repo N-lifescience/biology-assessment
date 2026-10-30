@@ -1,4 +1,9 @@
 export type Curriculum = "2015" | "2022" | "shared";
+export type Semester = "1" | "2";
+
+export function safeSemester(value: string | null): Semester | "" {
+  return value === "1" || value === "2" ? value : "";
+}
 
 export type SubjectItem = {
   curriculum: Curriculum;
@@ -60,6 +65,7 @@ export type CaseItem = {
   academic_years: number[];
   grades: number[];
   semesters: number[];
+  disclosure_semester: 1 | 2;
   primary_task_name: string;
   task_names: string[];
   action_tags: string[];
@@ -128,6 +134,7 @@ export type AssessmentItemSummary = {
 
 export type CuratedAssessmentItem = AssessmentItemSummary & {
   case_id: string;
+  disclosure_semester: 1 | 2;
   curriculum: Curriculum;
   subject: string;
   school_name: string;
@@ -142,6 +149,7 @@ export type CuratedAssessmentItem = AssessmentItemSummary & {
 
 export type CaseDetailResponse = {
   case_id: string;
+  disclosure_semester: 1 | 2;
   source_format: string;
   boundary_status: string;
   extraction_status: string;
@@ -152,6 +160,7 @@ export type CaseDetailResponse = {
 
 export type AssessmentItemDetail = AssessmentItemSummary & {
   case_id: string;
+  disclosure_semester: 1 | 2;
   curriculum: Curriculum;
   subject: string;
   school_name: string;
@@ -164,6 +173,7 @@ export type AssessmentItemDetail = AssessmentItemSummary & {
 };
 
 export type FacetResponse = {
+  semesters: Array<{ value: Semester; count: number }>;
   regions: Array<{ value: string; count: number }>;
   districts: Array<{ value: string; count: number }>;
   action_tags: Array<{ value: string; count: number }>;

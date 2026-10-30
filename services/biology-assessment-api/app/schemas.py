@@ -72,6 +72,7 @@ class FacetResponse(StrictModel):
     regions: list[FacetItem]
     districts: list[FacetItem]
     action_tags: list[FacetItem]
+    semesters: list[FacetItem]
 
 
 class AssessmentStructure(StrictModel):
@@ -95,6 +96,7 @@ class CaseItem(StrictModel):
     academic_years: list[int]
     grades: list[int]
     semesters: list[int]
+    disclosure_semester: int = Field(ge=1, le=2)
     primary_task_name: str
     task_names: list[str]
     action_tags: list[str]
@@ -137,6 +139,7 @@ class AssessmentItemSummary(StrictModel):
 
 class CaseDetailResponse(StrictModel):
     case_id: str
+    disclosure_semester: int = Field(ge=1, le=2)
     source_format: str
     boundary_status: str
     extraction_status: str
@@ -147,6 +150,7 @@ class CaseDetailResponse(StrictModel):
 
 class AssessmentItemDetail(AssessmentItemSummary):
     case_id: str
+    disclosure_semester: int = Field(ge=1, le=2)
     curriculum: str
     subject: str
     school_name: str
@@ -160,6 +164,7 @@ class AssessmentItemDetail(AssessmentItemSummary):
 
 class CuratedAssessmentItem(AssessmentItemSummary):
     case_id: str
+    disclosure_semester: int = Field(ge=1, le=2)
     curriculum: str
     subject: str
     school_name: str

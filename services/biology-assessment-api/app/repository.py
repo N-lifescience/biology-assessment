@@ -163,6 +163,16 @@ def like_pattern(value: str) -> str:
     return f"%{escaped}%"
 
 
+def disclosure_semester_sql(source_column: str = "c.source_url") -> str:
+    """Derive the semester from the disclosure round, never the document body."""
+    return f"CASE WHEN instr({source_column}, 'JG_CHASU=3') > 0 THEN 2 ELSE 1 END"
+
+
+def semester_facets(rows: list[sqlite3.Row]) -> list[dict[str, object]]:
+    counts = {str(row["value"]): int(row["count"]) for row in rows}
+    return [{"value": value, "count": counts.get(value, 0)} for value in ("1", "2")]
+
+
 class CatalogRepository:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
@@ -210,6 +220,7 @@ class CatalogRepository:
         region: str | None = None,
         district: str | None = None,
         topic: str | None = None,
+        semester: str | None = None,
         multi_axis: bool = False,
     ) -> tuple[list[str], list[object]]:
         # ``category`` is the 방법 axis; ``topic`` narrows the 주제 axis of the
@@ -240,6 +251,9 @@ class CatalogRepository:
             if value:
                 clauses.append(f"cases.{column} = ?")
                 parameters.append(value)
+        if semester:
+            clauses.append(f"{disclosure_semester_sql('cases.source_url')} = ?")
+            parameters.append(int(semester))
         return clauses, parameters
 
     def catalog_counts(self) -> tuple[int, int]:
@@ -347,21 +361,19 @@ class CatalogRepository:
             ),
         )
 
-    def cases(
-        self,
+    @staticmethod
+    def _case_filters(
         *,
-        curriculum: str | None,
-        subject: str | None,
-        tag: str | None,
-        region: str | None,
-        district: str | None,
-        source_status: str | None,
-        query: str | None,
-        include_ambiguous: bool,
-        limit: int,
-        offset: int,
-    ) -> tuple[list[dict[str, object]], int]:
-        joins: list[str] = []
+        curriculum: str | None = None,
+        subject: str | None = None,
+        tag: str | None = None,
+        region: str | None = None,
+        district: str | None = None,
+        source_status: str | None = None,
+        query: str | None = None,
+        include_ambiguous: bool = True,
+        semester: str | None = None,
+    ) -> tuple[list[str], list[object]]:
         clauses: list[str] = []
         parameters: list[object] = []
         search = search_tokens(query or "")
@@ -418,18 +430,43 @@ class CatalogRepository:
                 "(c.primary_task_name = '구체적 과제명 미탐지' "
                 "OR c.title_basis NOT IN ('source_detail', 'source_detail_bundle_review'))"
             )
-        join_sql = " ".join(joins)
+        if semester:
+            clauses.append(f"{disclosure_semester_sql()} = ?")
+            parameters.append(int(semester))
+        return clauses, parameters
+
+    def cases(
+        self,
+        *,
+        curriculum: str | None,
+        subject: str | None,
+        tag: str | None,
+        region: str | None,
+        district: str | None,
+        source_status: str | None,
+        query: str | None,
+        include_ambiguous: bool,
+        limit: int,
+        offset: int,
+        semester: str | None = None,
+    ) -> tuple[list[dict[str, object]], int]:
+        clauses, parameters = self._case_filters(
+            curriculum=curriculum, subject=subject, tag=tag, region=region,
+            district=district, source_status=source_status, query=query,
+            include_ambiguous=include_ambiguous, semester=semester,
+        )
         where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connect() as connection:
             total = int(
                 connection.execute(
-                    f"SELECT COUNT(DISTINCT c.case_id) FROM cases c {join_sql}{where_sql}",
+                    f"SELECT COUNT(DISTINCT c.case_id) FROM cases c {where_sql}",
                     parameters,
                 ).fetchone()[0]
             )
             rows = connection.execute(
                 f"""
-                SELECT DISTINCT c.* FROM cases c {join_sql}{where_sql}
+                SELECT DISTINCT c.*, {disclosure_semester_sql()} AS disclosure_semester
+                FROM cases c {where_sql}
                 ORDER BY c.review_score DESC, c.case_id
                 LIMIT ? OFFSET ?
                 """,
@@ -438,32 +475,27 @@ class CatalogRepository:
         return [self._case_item(row) for row in rows], total
 
     def facets(
-        self, curriculum: str | None, subject: str | None, region: str | None
+        self, curriculum: str | None, subject: str | None, region: str | None,
+        semester: str | None = None, *, district: str | None = None,
+        tag: str | None = None, query: str | None = None,
+        include_ambiguous: bool = True,
     ) -> dict[str, list[dict[str, object]]]:
-        clauses: list[str] = []
-        parameters: list[object] = []
         with self.connect() as connection:
             has_detail_items = connection.execute(
                 "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
                 "AND name = 'assessment_items'"
             ).fetchone() is not None
-        if has_detail_items:
-            clauses.append("c.title_basis = 'source_detail'")
-            clauses.append(
-                "EXISTS (SELECT 1 FROM assessment_items public_item "
-                "WHERE public_item.case_id = c.case_id "
-                "AND public_item.extraction_status = 'bounded' "
-                "AND public_item.title_basis IN ('table', 'heading'))"
-            )
-        if curriculum:
-            if subject:
-                clauses.append("c.curriculum IN (?, 'shared')")
-            else:
-                clauses.append("c.curriculum = ?")
-            parameters.append(curriculum)
-        if subject:
-            clauses.append("c.subject = ?")
-            parameters.append(subject)
+        source_status = "confirmed" if has_detail_items else None
+        clauses, parameters = self._case_filters(
+            curriculum=curriculum, subject=subject, semester=semester,
+            include_ambiguous=include_ambiguous, source_status=source_status,
+        )
+        semester_clauses, semester_parameters = self._case_filters(
+            curriculum=curriculum, subject=subject, region=region, district=district,
+            tag=tag, query=query, include_ambiguous=include_ambiguous,
+            source_status=source_status,
+        )
+        semester_where = " WHERE " + " AND ".join(semester_clauses) if semester_clauses else ""
         where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
         district_clauses = [*clauses]
         district_parameters = [*parameters]
@@ -505,7 +537,13 @@ class CatalogRepository:
                 """,
                 district_parameters,
             ).fetchall()
+            semester_rows = connection.execute(
+                f"SELECT {disclosure_semester_sql()} AS value, COUNT(*) AS count"
+                f" FROM cases c {semester_where} GROUP BY value",
+                semester_parameters,
+            ).fetchall()
         return {
+            "semesters": semester_facets(semester_rows),
             "regions": [
                 {"value": str(row["value"]), "count": int(row["count"])} for row in region_rows
             ],
@@ -519,13 +557,18 @@ class CatalogRepository:
 
     def case(self, case_id: str) -> dict[str, object] | None:
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,)).fetchone()
+            row = connection.execute(
+                f"SELECT c.*, {disclosure_semester_sql()} AS disclosure_semester"
+                " FROM cases c WHERE c.case_id = ?", (case_id,),
+            ).fetchone()
         return self._case_item(row) if row else None
 
     def case_detail(self, case_id: str) -> dict[str, object] | None:
         with self.connect() as connection:
             status = connection.execute(
-                "SELECT * FROM case_detail_status WHERE case_id = ?", (case_id,)
+                f"SELECT status.*, {disclosure_semester_sql()} AS disclosure_semester"
+                " FROM case_detail_status status JOIN cases c ON c.case_id = status.case_id"
+                " WHERE status.case_id = ?", (case_id,)
             ).fetchone()
             if status is None:
                 return None
@@ -547,6 +590,7 @@ class CatalogRepository:
         confirmed_titles = [str(row["title"]) for row in rows]
         return {
             "case_id": case_id,
+            "disclosure_semester": int(status["disclosure_semester"]),
             "source_format": str(status["source_format"]),
             "boundary_status": str(status["boundary_status"]),
             "extraction_status": "bounded",
@@ -564,7 +608,8 @@ class CatalogRepository:
             row = connection.execute(
                 f"""
                 SELECT item.*, cases.curriculum, cases.subject, cases.school_name,
-                       cases.region, {district_select}, cases.candidate_name, cases.source_url
+                       cases.region, {district_select}, cases.candidate_name, cases.source_url,
+                       {disclosure_semester_sql('cases.source_url')} AS disclosure_semester
                 FROM assessment_items item
                 JOIN cases ON cases.case_id = item.case_id
                 WHERE item.item_id = ?
@@ -605,6 +650,7 @@ class CatalogRepository:
                 "district": str(row["district"]),
                 "source_name": str(row["candidate_name"]),
                 "source_url": str(row["source_url"]),
+                "disclosure_semester": int(row["disclosure_semester"]),
                 "source_html": source_html,
                 "rubric_html": rubric_html,
             }
@@ -622,6 +668,7 @@ class CatalogRepository:
         limit: int,
         topic: str | None = None,
         offset: int = 0,
+        semester: str | None = None,
     ) -> list[dict[str, object]]:
         with self.connect() as connection:
             has_rankings = connection.execute(
@@ -651,6 +698,7 @@ class CatalogRepository:
                     region=region,
                     district=district,
                     topic=topic if has_topic else None,
+                    semester=semester,
                     multi_axis=self._has_axes(connection),
                 )
                 district_select = "cases.district" if has_district else "'' AS district"
@@ -660,7 +708,8 @@ class CatalogRepository:
                     SELECT item.*, ranking.category, {topic_select},
                            ranking.priority_score,
                            ranking.priority_signals_json, cases.curriculum,
-                           cases.subject, cases.school_name, cases.region, {district_select}
+                           cases.subject, cases.school_name, cases.region, {district_select},
+                           {disclosure_semester_sql('cases.source_url')} AS disclosure_semester
                     FROM assessment_items item
                     JOIN assessment_item_rankings ranking ON ranking.item_id = item.item_id
                     JOIN cases ON cases.case_id = item.case_id
@@ -684,6 +733,7 @@ class CatalogRepository:
                         "school_name": str(row["school_name"]),
                         "region": str(row["region"]),
                         "district": str(row["district"]),
+                        "disclosure_semester": int(row["disclosure_semester"]),
                         "category": str(row["category"]),
                         "topic": str(row["topic"]),
                         "priority_score": int(row["priority_score"]),
@@ -703,6 +753,7 @@ class CatalogRepository:
             district=district,
             category=category,
             limit=limit + offset,
+            semester=semester,
         )
         return [
             {
@@ -725,6 +776,7 @@ class CatalogRepository:
                 "school_name": str(item["school_name"]),
                 "region": str(item["region"]),
                 "district": str(item["district"]),
+                "disclosure_semester": int(item["disclosure_semester"]),
                 "category": str(item["category"]),
                 "priority_score": int(item["priority_score"]),
                 "priority_signals": list(item["priority_signals"]),
@@ -741,6 +793,7 @@ class CatalogRepository:
         district: str | None,
         category: str,
         topic: str | None = None,
+        semester: str | None = None,
     ) -> int:
         with self.connect() as connection:
             has_topic = any(
@@ -758,6 +811,7 @@ class CatalogRepository:
                 region=region,
                 district=district,
                 topic=topic if has_topic else None,
+                semester=semester,
                 multi_axis=self._has_axes(connection),
             )
             row = connection.execute(
@@ -779,6 +833,9 @@ class CatalogRepository:
         subject: str | None,
         region: str | None,
         category: str,
+        semester: str | None = None,
+        district: str | None = None,
+        topic: str | None = None,
     ) -> dict[str, list[dict[str, object]]]:
         joins = """
             FROM assessment_items item
@@ -786,11 +843,17 @@ class CatalogRepository:
             JOIN cases ON cases.case_id = item.case_id
         """
         with self.connect() as connection:
+            multi_axis = self._has_axes(connection)
             clauses, parameters = self._curated_filters(
                 category=category,
                 curriculum=curriculum,
                 subject=subject,
-                multi_axis=self._has_axes(connection),
+                semester=semester,
+                multi_axis=multi_axis,
+            )
+            semester_clauses, semester_parameters = self._curated_filters(
+                category=category, curriculum=curriculum, subject=subject,
+                region=region, district=district, topic=topic, multi_axis=multi_axis,
             )
             where_sql = " AND ".join(clauses)
             district_clauses = [*clauses]
@@ -818,7 +881,13 @@ class CatalogRepository:
                 """,
                 district_parameters,
             ).fetchall()
+            semester_rows = connection.execute(
+                f"SELECT {disclosure_semester_sql('cases.source_url')} AS value, COUNT(*) AS count"
+                f" {joins} WHERE {' AND '.join(semester_clauses)} GROUP BY value",
+                semester_parameters,
+            ).fetchall()
         return {
+            "semesters": semester_facets(semester_rows),
             "regions": [
                 {"value": str(row["value"]), "count": int(row["count"])}
                 for row in region_rows
@@ -840,6 +909,7 @@ class CatalogRepository:
         category: str,
         limit: int,
         topic: str | None = None,
+        semester: str | None = None,
     ) -> list[dict[str, object]]:
         with self.connect() as connection:
             has_detail_items = connection.execute(
@@ -881,11 +951,14 @@ class CatalogRepository:
         if district:
             clauses.append("c.district = ?")
             parameters.append(district)
+        if semester:
+            clauses.append(f"{disclosure_semester_sql()} = ?")
+            parameters.append(int(semester))
         where_sql = " AND ".join(clauses)
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT c.* FROM cases c
+                SELECT c.*, {disclosure_semester_sql()} AS disclosure_semester FROM cases c
                 WHERE {where_sql}
                 ORDER BY c.priority_score DESC, c.review_score DESC, c.case_id
                 LIMIT ?
@@ -990,6 +1063,7 @@ class CatalogRepository:
             "academic_years": [int(value) for value in parse_json_list(row["academic_years_json"])],
             "grades": [int(value) for value in parse_json_list(row["grades_json"])],
             "semesters": [int(value) for value in parse_json_list(row["semesters_json"])],
+            "disclosure_semester": int(row["disclosure_semester"]),
             "primary_task_name": primary_task_name,
             "task_names": task_names,
             "action_tags": [str(value) for value in parse_json_list(row["action_tags_json"])],

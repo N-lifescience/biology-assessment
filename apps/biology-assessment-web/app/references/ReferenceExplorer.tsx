@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "../SiteLink";
+import SemesterFilter from "../SemesterFilter";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import {
   apiParameters,
   fetchCatalog,
+  safeSemester,
   type CuratedAssessmentItem,
   type FacetResponse,
   type ReferencePageResponse,
@@ -87,12 +89,13 @@ export default function ReferenceExplorer() {
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [curriculum, setCurriculum] = useState(safeCurriculum(parameters.get("curriculum")));
   const [subject, setSubject] = useState(parameters.get("subject") || "");
+  const [semester, setSemester] = useState(safeSemester(parameters.get("semester")));
   const [region, setRegion] = useState(parameters.get("region") || "");
   const [district, setDistrict] = useState(parameters.get("district") || "");
   const [category, setCategory] = useState<CategoryId>(safeCategory(parameters.get("category")));
   const [topic, setTopic] = useState<TopicId | "">(safeTopic(parameters.get("topic")));
   const [offset, setOffset] = useState(0);
-  const [facets, setFacets] = useState<FacetResponse>({ regions: [], districts: [], action_tags: [] });
+  const [facets, setFacets] = useState<FacetResponse>({ regions: [], districts: [], action_tags: [], semesters: [] });
   const [items, setItems] = useState<CuratedAssessmentItem[]>([]);
   const [total, setTotal] = useState(0);
   const [interpretation, setInterpretation] = useState("");
@@ -101,7 +104,7 @@ export default function ReferenceExplorer() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchCatalog<ReferencePageResponse>(`references?${apiParameters({ curriculum, subject, region, district, category, topic: topic || undefined, limit: CURATED_SIZE, offset: offset || undefined })}`, controller.signal)
+    fetchCatalog<ReferencePageResponse>(`references?${apiParameters({ curriculum, subject, semester, region, district, category, topic: topic || undefined, limit: CURATED_SIZE, offset: offset || undefined })}`, controller.signal)
       .then((payload) => {
         setSubjects(payload.subjects.filter((item) => item.curriculum !== "shared"));
         setFacets(payload.facets);
@@ -112,15 +115,15 @@ export default function ReferenceExplorer() {
       .catch((reason: Error) => { if (!controller.signal.aborted) setError(reason.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [curriculum, subject, region, district, category, topic, offset]);
+  }, [curriculum, subject, semester, region, district, category, topic, offset]);
 
   useEffect(() => {
-    const query = apiParameters({ curriculum, subject, region, district, category: category === "inquiry" ? undefined : category, topic: topic || undefined });
+    const query = apiParameters({ curriculum, subject, semester, region, district, category: category === "inquiry" ? undefined : category, topic: topic || undefined });
     router.replace(query ? `/references?${query}` : "/references", { scroll: false });
-  }, [curriculum, subject, region, district, category, topic, router]);
+  }, [curriculum, subject, semester, region, district, category, topic, router]);
 
   const courseOptions = useMemo(() => uniqueSubjectOptions(subjects, curriculum), [curriculum, subjects]);
-  const activeFilterCount = [curriculum, subject, region, district].filter(Boolean).length;
+  const activeFilterCount = [curriculum, subject, semester, region, district].filter(Boolean).length;
   const totalPages = Math.max(1, Math.ceil(total / CURATED_SIZE));
   const currentPage = Math.floor(offset / CURATED_SIZE) + 1;
 
@@ -130,7 +133,7 @@ export default function ReferenceExplorer() {
     const next = uniqueSubjectOptions(subjects, value);
     beginReload(); setCurriculum(value); setSubject(next.some((item) => item.subject === subject) ? subject : ""); setRegion(""); setDistrict("");
   }
-  function clearFilters() { beginReload(); setCurriculum(""); setSubject(""); setRegion(""); setDistrict(""); }
+  function clearFilters() { beginReload(); setCurriculum(""); setSemester(""); setSubject(""); setRegion(""); setDistrict(""); }
 
   return <main id="main-content" className="catalogPage referencePage">
     <header className="pageHeaderCompact">
@@ -148,6 +151,7 @@ export default function ReferenceExplorer() {
       <div className="filterControls caseCourseControls">
         <label><span>교육과정</span><select value={curriculum} onChange={(event) => changeCurriculum(event.target.value)}><option value="">전체 교육과정</option><option value="2015">2015 개정</option><option value="2022">2022 개정</option></select></label>
         <label className="wideControl"><span>생명과학 교과군 과목</span><select value={subject} onChange={(event) => { beginReload(); setSubject(event.target.value); setRegion(""); setDistrict(""); }}><option value="">전체 과목</option>{courseOptions.map((item) => <option key={item.subject} value={item.subject}>{item.subject} · {item.documents.toLocaleString()}건</option>)}</select></label>
+        <SemesterFilter value={semester} semesters={facets.semesters} onChange={(value) => { beginReload(); setSemester(value); }} />
         <label><span>시·도</span><select value={region} onChange={(event) => { beginReload(); setRegion(event.target.value); setDistrict(""); }}><option value="">전국</option>{facets.regions.map((item) => <option key={item.value} value={item.value}>{item.value} · {item.count}</option>)}</select></label>
         <label><span>시·군·구</span><select value={district} disabled={!region} onChange={(event) => { beginReload(); setDistrict(event.target.value); }}><option value="">{region ? "전체 시·군·구" : "시·도를 먼저 선택"}</option>{region ? facets.districts.map((item) => <option key={item.value} value={item.value}>{item.value} · {item.count}</option>) : null}</select></label>
       </div>
@@ -168,7 +172,7 @@ export default function ReferenceExplorer() {
       <p className="rankingBoundary">주제 × 방법 분류는 동국대 「수행평가 영역명 활용 가이드북」 기준이며, 원문의 영역명과 학교가 표시한 평가 방법으로 자동 판정합니다. 표시 순서에 품질 의미는 없습니다.</p>
       {loading ? <div className="compactLoading" role="status">설계 참고 순서를 정리하고 있습니다.</div> : null}
       {error ? <div className="errorPanel" role="alert"><strong>자료를 불러오지 못했습니다.</strong><p>{error}</p></div> : null}
-      {!loading && !error && items.length ? <div className="tableScroll"><table className="curatedTable"><thead><tr><th>표시 순서</th><th>수행평가명</th><th>과목·학교</th><th>확인된 근거</th><th>확인</th></tr></thead><tbody>{items.map((item, index) => <tr key={item.item_id}><td data-label="표시 순서"><strong className="rankNumber">{offset + index + 1}</strong></td><td data-label="수행평가명"><strong>{item.title}</strong>{item.overview ? <p>{item.overview}</p> : null}</td><td data-label="과목·학교"><span>{item.curriculum} 개정 · {item.subject}</span><small>{item.school_name}<br />{item.region}{item.district ? ` ${item.district}` : ""}</small></td><td data-label="확인된 근거"><div className="signalChips">{item.priority_signals.map((signal) => <span key={signal}>{signal}</span>)}</div></td><td data-label="확인"><Link href={`/cases/${item.case_id}?item=${item.item_id}`}>원문 표 보기 →</Link></td></tr>)}</tbody></table></div> : null}
+      {!loading && !error && items.length ? <div className="tableScroll"><table className="curatedTable"><thead><tr><th>표시 순서</th><th>수행평가명</th><th>과목·학교</th><th>확인된 근거</th><th>확인</th></tr></thead><tbody>{items.map((item, index) => <tr key={item.item_id}><td data-label="표시 순서"><strong className="rankNumber">{offset + index + 1}</strong></td><td data-label="수행평가명"><strong>{item.title}</strong>{item.overview ? <p>{item.overview}</p> : null}</td><td data-label="과목·학교"><div className="caseBadges"><span>{item.curriculum} 개정</span><span>{item.subject}</span><span>{item.disclosure_semester}학기</span></div><small>{item.school_name}<br />{item.region}{item.district ? ` ${item.district}` : ""}</small></td><td data-label="확인된 근거"><div className="signalChips">{item.priority_signals.map((signal) => <span key={signal}>{signal}</span>)}</div></td><td data-label="확인"><Link href={`/cases/${item.case_id}?item=${item.item_id}`}>원문 표 보기 →</Link></td></tr>)}</tbody></table></div> : null}
       {!loading && !error && totalPages > 1 ? <nav className="pagination" aria-label="참고 사례 페이지"><button type="button" disabled={offset === 0} onClick={() => { setLoading(true); setError(""); setOffset(Math.max(0, offset - CURATED_SIZE)); }}>← 이전</button><span><strong>{currentPage}</strong> / {totalPages}</span><button type="button" disabled={offset + CURATED_SIZE >= total} onClick={() => { setLoading(true); setError(""); setOffset(offset + CURATED_SIZE); }}>다음 →</button></nav> : null}
       {!loading && !error && items.length === 0 ? <p className="compactEmpty">이 조건에서 원문 표 제목·구조까지 확인된 설계 참고 사례가 아직 없습니다. 전체 라이브러리에서 원문 묶음도 함께 찾아볼 수 있습니다.</p> : null}
       {interpretation ? <p className="rankingBoundary">{interpretation}</p> : null}

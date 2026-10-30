@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiParameters, fetchCatalog, hasSafetyEthicsNotice } from "./catalog-api";
+import { apiParameters, fetchCatalog, hasSafetyEthicsNotice, safeSemester } from "./catalog-api";
 
 function jsonResponse(status: number, body: unknown) {
   return {
@@ -15,10 +15,25 @@ afterEach(() => {
 });
 
 describe("apiParameters", () => {
+  it("includes the disclosure semester alongside other filters and omits all semesters", () => {
+    expect(apiParameters({ semester: "2", curriculum: "2022", region: "서울" }))
+      .toBe("semester=2&curriculum=2022&region=%EC%84%9C%EC%9A%B8");
+    expect(apiParameters({ semester: "", limit: 20 })).toBe("limit=20");
+  });
+
   it("keeps only defined, non-empty values and stringifies them", () => {
     expect(
       apiParameters({ subject: "생명과학Ⅰ", limit: 20, ambiguous: false, region: "", grade: undefined }),
     ).toBe("subject=%EC%83%9D%EB%AA%85%EA%B3%BC%ED%95%99%E2%85%A0&limit=20&ambiguous=false");
+  });
+});
+
+describe("safeSemester", () => {
+  it("restores only supported semester values from the URL", () => {
+    expect(safeSemester("1")).toBe("1");
+    expect(safeSemester("2")).toBe("2");
+    expect(safeSemester("3")).toBe("");
+    expect(safeSemester(null)).toBe("");
   });
 });
 
@@ -46,6 +61,17 @@ describe("hasSafetyEthicsNotice", () => {
 });
 
 describe("fetchCatalog", () => {
+  it.each(["cases", "curated", "references", "facets"])(
+    "forwards the semester parameter to %s",
+    async (endpoint) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, { items: [] }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await fetchCatalog(`${endpoint}?${apiParameters({ semester: "2", curriculum: "2022" })}`);
+      expect(fetchMock.mock.calls[0][0]).toBe(`/api/v1/${endpoint}?semester=2&curriculum=2022`);
+    },
+  );
+
   it("requests the versioned API path and returns the parsed body", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, { items: [], total: 0 }));
     vi.stubGlobal("fetch", fetchMock);
