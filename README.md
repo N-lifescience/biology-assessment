@@ -17,7 +17,8 @@
 ## 현재 상태
 
 - 웹 `apps/biology-assessment-web`과 API `services/biology-assessment-api`는 배포돼 있다
-  (`https://suhaeng-biology.vercel.app`, 11,848개 공개 항목).
+  (`https://suhaeng-biology.vercel.app`). 2026-10-30 배포본: 2026학년도 1학기(정시 1차) 7,211건과
+  2학기(정시 3차) 2,135건, 사례 9,346건 중 과제 확정 7,843건, 확정 수행평가 항목 23,459개.
 - 발행 DB는 `services/biology-assessment-api/data/*.sqlite.gz.part-*`로 저장소에 실려 있고,
   로컬 검증용 `data/publish/`는 gitignore다.
 - 원문 추출은 2026-10-30부터 [kordoc](https://github.com/chrisryugj/kordoc)(`tools/kordoc/`, 버전 고정)으로
@@ -64,9 +65,11 @@
 
 ## 운영 배포
 
-- 공개 예정 주소: `https://suhaeng-biology.vercel.app`
+- 주소: `https://suhaeng-biology.vercel.app`
 - Vercel 프로젝트: `suhaeng-biology`
-- 아직 배포하지 않았다. 발행 DB가 생긴 뒤 `npm run deploy:prepare`로 준비한다.
+- GitHub `master`에 푸시하면 Vercel이 배포한다. 발행 DB를 바꿨으면 `npm run deploy:prepare`
+  (데이터 감사 → 렌더러 감사 → verify → package → stage)로 `services/biology-assessment-api/data/`의
+  gz 조각을 갱신해 함께 커밋한다. 조각은 커밋마다 저장소를 약 60MB 키우므로 배포는 묶어서 한다.
 - Vercel 전송 한도에 맞춘 운영 DB는 사례별 근거를 160자 미리보기로 제공하며,
   로컬 발행 DB의 긴 발췌와 학교알리미 원문은 그대로 보존한다.
 
@@ -137,7 +140,7 @@ tail -n 30 data/derived/biology_assessment_final_pipeline.log.jsonl
 - 표본이나 모델 검토용 일부 건수를 전국 자료의 총수로 표현하지 않는다.
 - 평가계획에서 과목이 검출되지 않았다고 해서 해당 학교가 과목을 개설하지 않은
   것으로 판단하지 않는다.
-- 현재 원문은 대부분 2026학년도 1학기이므로, 2025학년도 2015 개정 생명과학Ⅱ의
+- 원문은 2026학년도 1·2학기 공시분이다. 2025학년도 2015 개정 생명과학Ⅱ의
   전국 경향은 역사 자료를 추가 수집한 뒤 별도로 분석한다.
 - 해부·채집·시약·동물윤리가 얽힌 사례는 별도 차단 시스템을 두지 않고,
   사례 카드·상세에 `안전·윤리 주의` 표시만 보여 교사가 판단하게 한다.
