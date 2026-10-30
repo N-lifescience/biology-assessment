@@ -1172,7 +1172,7 @@ def refresh_cases_from_items(connection: sqlite3.Connection) -> int:
     return len(updates)
 
 
-EXCERPT_MAX_CHARS = 1200
+EXCERPT_MAX_CHARS = 600
 _PIPE_SEPARATOR_CELLS_RE = re.compile(r"(?:\|\s*:?-{3,}:?\s*)+\|?")
 _MARKUP_RESIDUE_RE = re.compile(r"^#{1,6}\s+|(?<![가-힣A-Za-z])/?t[dhr]>|</?t[dhr][^>]*$", re.M)
 
