@@ -410,6 +410,19 @@ CHECKED_BOX_ARTIFACT_RE = re.compile(r"gfedcb")
 UNCHECKED_BOX_ARTIFACT_RE = re.compile(r"gfedc(?!b)")
 
 
+SEAL_NAME_RE = re.compile(r"(?<![가-힣])[가-힣]{2,4}(\s*)\(인\)")
+
+
+def mask_seal_names(value: str) -> str:
+    """Hide a teacher's name written before a seal mark ("담당교사: 강여은(인)").
+
+    The school publishes the plan, but the archive has no need for a named
+    person; the cell keeps its shape as "○○○(인)".
+    """
+
+    return SEAL_NAME_RE.sub(lambda match: f"○○○{match.group(1)}(인)", value)
+
+
 def normalize_checkbox_glyphs(value: str) -> str:
     """Restore a Hangul checkbox that HWP/PDF text extraction flattened.
 
@@ -2745,7 +2758,7 @@ class _SafeTableParser(StdlibHTMLParser):
             self.output.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
-        self.output.append(html.escape(normalize_checkbox_glyphs(data)))
+        self.output.append(html.escape(mask_seal_names(normalize_checkbox_glyphs(data))))
 
 
 def sanitize_table_html(value: str) -> str:
@@ -2832,7 +2845,7 @@ def balance_table_tags(value: str) -> str:
 
 
 def _inline_html(value: str) -> str:
-    escaped = html.escape(normalize_checkbox_glyphs(html.unescape(value)))
+    escaped = html.escape(mask_seal_names(normalize_checkbox_glyphs(html.unescape(value))))
     escaped = re.sub(r"&lt;br\s*/?&gt;", "<br>", escaped, flags=re.I)
     escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
     return escaped

@@ -1794,3 +1794,13 @@ def test_an_area_score_label_after_an_item_number_names_the_task() -> None:
 
     assert title.startswith("세포호흡 설명하기")
     assert label == "영역만점"
+
+
+def test_a_name_before_a_seal_mark_is_not_published() -> None:
+    rendered = markdown_fragment_to_html(
+        "담당교사: 강여은(인), 차종우 (인)\n\n"
+        "<table>\n<tr><td>지도교사</td><td>이형수 (인)</td></tr>\n</table>"
+    )
+
+    assert "강여은" not in rendered and "차종우" not in rendered and "이형수" not in rendered
+    assert "○○○(인)" in rendered and "○○○ (인)" in rendered
