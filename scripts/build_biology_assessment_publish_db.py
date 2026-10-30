@@ -29,10 +29,15 @@ import json
 import re
 import shutil
 import sqlite3
+import sys
 import time
 import zlib
 from html.parser import HTMLParser
 from pathlib import Path
+
+# Run as a script (the pipeline does), ``scripts.*`` imports below need the
+# project root on the path; imported as ``scripts.build_…`` it already is.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 SCHEMA = """
 CREATE TABLE cases (

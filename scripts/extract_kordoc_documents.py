@@ -337,16 +337,19 @@ def document_text(record: dict, store: Path, legacy_text=None) -> tuple[str, str
     members = record.get("members") or []
     statuses = [m.get("status") for m in members]
     text = document_flow_text(record, store)
-    failed = [m for m in members if m.get("status") == "failed"]
+    # A scanned or partly unreadable file can come back "short" with no text at
+    # all (a 245-page PDF with only PARTIAL_PARSE warnings); treat it as failed.
+    failed = [m for m in members if m.get("status") == "failed"
+              or (m.get("status") == "short" and not m.get("chars"))]
     if failed and legacy_text is not None:
         legacy = legacy_text(str(record.get("sha256") or ""))
-        if legacy and record.get("format") != "zip":
+        if legacy and record.get("format") != "zip" and len(legacy) > len(text):
             text, statuses = legacy, ["legacy"]
         elif legacy:
             for member in failed:
                 body = _legacy_member_body(legacy, member["name"])
                 if body:
-                    text = text.replace(f"[zip:{member['name']}][failed]",
+                    text = text.replace(f"[zip:{member['name']}][{member.get('status')}]",
                                         f"[zip:{member['name']}][legacy]\n{body}", 1)
                     statuses = [*statuses, "legacy"]
     # Contact and ID strings are masked here, not only in the evidence index,
