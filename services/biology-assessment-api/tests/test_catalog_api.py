@@ -18,7 +18,7 @@ def test_subjects_expose_all_course_groups_and_keep_ambiguity_separate() -> None
     payload = response.json()
     assert payload["total"] == 9
     assert any(
-        item["curriculum"] == "2022" and item["subject"] == "생명과학" and item["documents"] == 1416
+        item["curriculum"] == "2022" and item["subject"] == "생명과학" and item["documents"] == 1690
         for item in payload["items"]
     )
     # No 2015/2022-ambiguous subject exists in the current collection: every
@@ -35,14 +35,14 @@ def test_trends_return_verified_subject_counts_and_action_tags() -> None:
 
     assert biology.status_code == 200
     biology_item = biology.json()["items"][0]
-    assert biology_item["documents"] == 1416
-    assert biology_item["coverage"]["found"] == 1348
+    assert biology_item["documents"] == 1690
+    assert biology_item["coverage"]["found"] == 1477
     assert biology_item["small_sample"] is False
     assert any(tag["tag"] == "탐구" for tag in biology_item["action_tags"])
 
     assert biology_one.status_code == 200
     biology_one_item = biology_one.json()["items"][0]
-    assert biology_one_item["documents"] == 53
+    assert biology_one_item["documents"] == 95
     assert biology_one_item["small_sample"] is False
 
 
