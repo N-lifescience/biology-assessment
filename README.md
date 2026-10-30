@@ -17,8 +17,10 @@
 ## 현재 상태
 
 - 웹 `apps/biology-assessment-web`과 API `services/biology-assessment-api`는 배포돼 있다
-  (`https://suhaeng-biology.vercel.app`). 2026-10-30 배포본: 2026학년도 1학기(정시 1차) 7,211건과
-  2학기(정시 3차) 2,135건, 사례 9,346건 중 과제 확정 7,843건, 확정 수행평가 항목 23,459개.
+  (`https://suhaeng-biology.vercel.app`). 2026학년도 1학기(정시 1차) 7,211건과 2학기(정시 3차)
+  2,135건, 사례 9,346건. 2026-10-31 파서 갱신본: 과제 확정 7,895건, 확정 수행평가 항목 22,882개
+  (10-30 배포본 7,843건·23,459개에서 점수 칸·문서 구조 제목·지필고사·채점 질문과 중복 항목을 걷어내고,
+  표지 표·숫자 표기로 과목 구간을 찾은 사례를 더했다).
 - 발행 DB는 `services/biology-assessment-api/data/*.sqlite.gz.part-*`로 저장소에 실려 있고,
   로컬 검증용 `data/publish/`는 gitignore다.
 - 원문 추출은 2026-10-30부터 [kordoc](https://github.com/chrisryugj/kordoc)(`tools/kordoc/`, 버전 고정)으로
