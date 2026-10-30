@@ -1228,11 +1228,11 @@ a { color: inherit; }
 .sourcePaperTopline span { color: var(--forest); font-size: 0.65rem; font-weight: 900; }
 .sourcePaperTopline h2 { margin: 0.25rem 0 0; font-size: 1.2rem; letter-spacing: -0.035em; }
 .sourcePaperTopline small { color: var(--muted); font-size: 0.63rem; }
-.sourceDocumentHtml { min-width: 0; padding: 1.1rem; color: var(--ink); font-size: 1rem; line-height: 1.65; word-break: keep-all; overflow-wrap: anywhere; }
+.sourceDocumentHtml { min-width: 0; padding: 1.1rem; color: var(--ink); font-size: 1rem; line-height: 1.65; word-break: keep-all; overflow-wrap: break-word; }
 .sourceDocumentHtml h2, .sourceDocumentHtml h3, .sourceDocumentHtml h4, .sourceDocumentHtml h5, .sourceDocumentHtml h6 { margin: 1.25rem 0 0.55rem; color: var(--ink); line-height: 1.35; text-wrap: balance; }
 .sourceDocumentHtml p { margin: 0.45rem 0; white-space: pre-wrap; }
 .sourceDocumentHtml table { width: 100%; min-width: 660px; border-collapse: collapse; table-layout: auto; background: var(--paper); }
-.sourceDocumentHtml th, .sourceDocumentHtml td { min-width: 54px; padding: 0.6rem 0.7rem; border: 1px solid var(--line-strong); vertical-align: top; text-align: left; font-size: inherit; line-height: 1.65; }
+.sourceDocumentHtml th, .sourceDocumentHtml td { min-width: 5.5em; padding: 0.6rem 0.7rem; border: 1px solid var(--line-strong); vertical-align: top; text-align: left; font-size: inherit; line-height: 1.65; }
 .sourceDocumentHtml th { color: var(--ink); background: var(--surface-subtle); font-weight: 700; }
 .sourceDocumentHtml .source-list-item { padding-left: 1rem; text-indent: -0.8rem; }
 .sourceTableScroll { max-width: 100%; margin: 0.8rem 0 1.2rem; overflow-x: auto; }
