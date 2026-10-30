@@ -5,8 +5,14 @@ packages:
 nodeLinker: hoisted
 
 overrides:
-  postcss: 8.5.19
-  sharp: 0.35.3
+  postcss: 8.5.29
+  sharp: 0.35.5
+
+  source-map-js: 1.2.2
+  js-yaml: 4.3.2
+  undici: 8.10.2
+  brace-expansion: 5.0.12
+  braces: 3.0.3
 
 allowBuilds:
   esbuild: true
@@ -16,3 +22,7 @@ allowBuilds:
   protobufjs: false
   sharp: true
   unrs-resolver: true
+
+patchedDependencies:
+  braces@3.0.3: patches/braces@3.0.3.patch
+  brace-expansion@5.0.12: patches/brace-expansion@5.0.12.patch

@@ -1,0 +1,13 @@
+diff --git a/dist/commonjs/index.js b/dist/commonjs/index.js
+--- a/dist/commonjs/index.js
++++ b/dist/commonjs/index.js
+@@ -330,4 +330,7 @@
+     }
+     return acc;
+ }
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
++//# sourceMappingURL=index.js.map
++// Preserve the v1 CommonJS call signature used by minimatch 3.
++// Named exports remain available to modern consumers.
++module.exports = Object.assign(expand, module.exports);
