@@ -1167,6 +1167,65 @@ def refresh_cases_from_items(connection: sqlite3.Connection) -> int:
     return len(updates)
 
 
+EXCERPT_MAX_CHARS = 1200
+_PIPE_SEPARATOR_CELLS_RE = re.compile(r"(?:\|\s*:?-{3,}:?\s*)+\|?")
+_MARKUP_RESIDUE_RE = re.compile(r"^#{1,6}\s+|(?<![가-힣A-Za-z])/?t[dhr]>|</?t[dhr][^>]*$", re.M)
+
+
+def readable_excerpt(value: str) -> str:
+    """Plain reading text from a source fragment: no tags, pipes or heading marks.
+
+    Table cells are joined with `` · `` and rows with `` / `` so a rubric row
+    still reads as one line; a fragment cut mid-tag ("td>A …") loses the stub.
+    """
+
+    text = _PIPE_SEPARATOR_CELLS_RE.sub(" ", plain_text(value))
+    text = _MARKUP_RESIDUE_RE.sub(" ", text)
+    lines = []
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        line = " · ".join(cell for cell in cells if cell)
+        if line:
+            lines.append(line)
+    text = re.sub(r"\s+", " ", " / ".join(lines)).strip(" ·/")
+    if len(text) <= EXCERPT_MAX_CHARS:
+        return text
+    cut = text[:EXCERPT_MAX_CHARS]
+    return cut[: cut.rfind(" ")].rstrip(" ·") + " …" if " " in cut else cut + " …"
+
+
+def refresh_case_excerpts(connection: sqlite3.Connection) -> int:
+    """Rebuild ``cases.evidence_excerpt`` from the case's own bounded items.
+
+    The catalogue excerpt is a window of the whole document taken before the
+    subject boundary existed, so it shows another course's rows (사회문제탐구
+    성취기준 in a 생명과학 case) and raw table markup.  Where the parser bounded
+    items, their source fragments are the subject's own text; elsewhere the
+    old excerpt is kept with its markup removed.
+    """
+
+    fragments: dict[str, list[str]] = {}
+    for case_id, blob in connection.execute(
+        """
+        SELECT case_id, source_html_zlib FROM assessment_items
+        WHERE extraction_status = 'bounded' AND source_html_zlib IS NOT NULL
+        ORDER BY case_id, item_order
+        """
+    ):
+        fragments.setdefault(str(case_id), []).append(zlib.decompress(blob).decode("utf-8"))
+    updates = []
+    for case_id, excerpt in connection.execute("SELECT case_id, evidence_excerpt FROM cases"):
+        parts = fragments.get(str(case_id))
+        if parts:
+            text = readable_excerpt("\n".join(parts))
+        else:
+            text = readable_excerpt(str(excerpt or ""))
+        if text != excerpt:
+            updates.append((text, case_id))
+    connection.executemany("UPDATE cases SET evidence_excerpt = ? WHERE case_id = ?", updates)
+    return len(updates)
+
+
 def load_case_details(
     connection: sqlite3.Connection, catalog_path: Path, evidence_source_path: Path
 ) -> tuple[int, int, int]:
@@ -1246,6 +1305,7 @@ def load_case_details(
     ).fetchone()[0]
 
     print(f"cases_refreshed_from_items={refresh_cases_from_items(connection)}")
+    print(f"case_excerpts_refreshed={refresh_case_excerpts(connection)}")
     print(
         f"assessment_items={total_items} parsed_cases={parsed_cases} "
         f"confirmed_cases={confirmed_cases}"

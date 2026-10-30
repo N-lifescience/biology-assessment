@@ -470,3 +470,31 @@ def test_category_is_empty_when_no_seed_tag_matches() -> None:
     assert category_for(["탐구"]) == "inquiry"
     assert category_for(["토론", "탐구"]) == "inquiry"
     assert category_for(["실험"]) == "experiment"
+
+
+def test_readable_excerpt_drops_table_markup_and_tag_stubs() -> None:
+    from scripts.build_biology_assessment_publish_db import readable_excerpt
+
+    assert readable_excerpt("td>A 주요 개념 정리 | B 노트 | --- | --- |") == (
+        "A 주요 개념 정리 · B 노트"
+    )
+    assert readable_excerpt("# 2026학년도 계획 | 학년 | | --- | --- | | 1학년 |") == (
+        "2026학년도 계획 · 학년 · 1학년"
+    )
+    assert readable_excerpt(
+        "<table><tr><th>평가 요소</th><th>배점</th></tr>"
+        "<tr><td>보고서<br>작성</td><td>30</td></tr></table>"
+    ) == "평가 요소 · 배점 / 보고서 작성 · 30"
+
+
+def test_a_failed_zip_member_takes_its_own_legacy_chunk() -> None:
+    from scripts.extract_kordoc_documents import _legacy_member_body
+
+    legacy = (
+        "[zip:a.hwpx][ok]\n가 과목 계획\n\n"
+        "[zip:b.hwpx][ok]\n생명과학 계획\n표\n\n"
+        "[zip:c.pdf][ok]\n다"
+    )
+
+    assert _legacy_member_body(legacy, "b.hwpx") == "생명과학 계획\n표"
+    assert _legacy_member_body(legacy, "없는.hwpx") == ""

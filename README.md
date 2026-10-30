@@ -20,38 +20,47 @@
   (`https://suhaeng-biology.vercel.app`, 11,848개 공개 항목).
 - 발행 DB는 `services/biology-assessment-api/data/*.sqlite.gz.part-*`로 저장소에 실려 있고,
   로컬 검증용 `data/publish/`는 gitignore다.
-- 원문 수집·추출·분류 파이프라인(`scripts/`)은 2026-09-15부터 맥에서도 돈다.
-  윈도우 전용 `kordoc` 대신 `scripts/extract_biology_candidate_text.py`가 HWP(pyhwp)·HWPX·PDF·ZIP을
-  같은 JSONL 모양으로 뽑는다. 빠져 있던 `build_biology_extraction_retry_queue.py`,
-  `validate_biology_assessment_catalog.py`, `collect_schoolinfo_4ga_historical.py`도 다시 썼다.
+- 원문 추출은 2026-10-30부터 [kordoc](https://github.com/chrisryugj/kordoc)(`tools/kordoc/`, 버전 고정)으로
+  한다. HWP·HWPX·PDF·DOCX·XLSX와 ZIP 구성원을 표의 셀 격자(병합 칸·셀 속 표 포함) 그대로 읽어
+  `data/derived/kordoc/`에 저장하고(`scripts/extract_kordoc_documents.py`), `scripts/kordoc_flow.py`가
+  틀 표를 풀고 체크 표시(□V→☑)를 살려 파서 입력 텍스트를 만든다. 옛 추출(윈도우 `kordoc-fixed`,
+  맥 pyhwp·pdfplumber)이 병합 칸을 한 칸에 뭉개고 체크 표시를 잃던 문제를 이 단계에서 없앴다.
+  `scripts/extract_biology_candidate_text.py`는 kordoc를 쓸 수 없는 환경용 예비 추출기로만 남긴다.
 - 원문 첨부와 전체 본문 추출본(약 6GB)은 드라이브 공유 패키지 `학교알리미_원문추출본`에서
   `data/drive/학교알리미_원문추출본/`로 복사해 둔다(T7 SSD에만 있고 GitHub에는 없다).
 
 ## 2학기(정시 3차, 9월) 공시 갱신 절차
 
 학교알리미 4-가는 정시 1차(4월, `JG_CHASU=1`)에 1학기분, 정시 3차(9월, `JG_CHASU=3`)에 2학기분이
-올라온다. 3차 공시는 보통 9월 말에 게시된다(2025년은 9월 30일).
+올라온다. 3차 공시는 보통 9월 말에 게시된다(2025년 9월 30일, 2026년은 10월 말 수집 때 이미 공개).
+화면의 "학기" 필터와 배지는 본문 추정이 아니라 출처 주소의 `JG_CHASU`로 정한다.
 
 ```bash
 # 1) 공개됐는지 확인 (exit 0이면 공개, 2면 아직)
 .venv/bin/python scripts/collect_schoolinfo_4ga_historical.py --check-only --school 천안쌍용고등학교 --year 2026 --chasu 3
 
-# 2) 전국 수집 (약 2,370교, 0.8초 간격 → 1시간 안팎; 중단돼도 다시 실행하면 이어서 받는다)
+# 2) 전국 수집 (약 2,370교, 학교당 3~10초; 학교 목록을 나눠 수집기 2~3개로 돌리면 1~2시간)
 .venv/bin/python scripts/collect_schoolinfo_4ga_historical.py --schools data/derived/schoolinfo_schools.csv \
   --year 2026 --chasu 3 --output-root data/raw/schoolinfo --log data/derived/schoolinfo_4ga_download_log_2026_3.csv
 
-# 3) 매니페스트 → 본문 추출(HWP는 파일당 15초쯤 걸린다. --workers 4 권장)
-.venv/bin/python scripts/build_biology_assessment_manifest.py --log data/derived/schoolinfo_4ga_download_log_2026_3.csv \
-  --output data/derived/biology_assessment_source_manifest_2026_3.csv
-.venv/bin/python scripts/extract_biology_candidate_text.py --manifest data/derived/biology_assessment_source_manifest_2026_3.csv \
-  --output data/derived/biology_allplan_remaining_text_2026_3_0000.jsonl --workers 4
+# 3) 매니페스트 → kordoc 변환 (다른 교과 전용 파일은 이름으로 건너뛴다)
+.venv/bin/python scripts/build_biology_assessment_manifest.py --log <수집 로그> --output data/derived/2026_3/source_manifest.csv
+.venv/bin/python scripts/extract_kordoc_documents.py --manifest data/derived/2026_3/source_manifest.csv \
+  --output data/derived/2026_3/kordoc_evidence_source.jsonl --workers 9 --skip-other-departments
 
-# 4) 이후는 기존 순서: 재시도 큐 → 근거 색인 → strict → 카탈로그 → 경향 → 검증 → 발행 DB
-#    (run_final_biology_assessment_pipeline.py 의 단계와 같다)
+# 4) 증거 색인 → 엄격 후보 → 학교·과목 카탈로그 → 추세 → 2학기 발행 DB
+#    (build_biology_assessment_evidence_index.py --input-jsonl …, build_strict_biology_shortlist.py,
+#     build_school_subject_assessment_catalog.py, build_biology_assessment_trends.py,
+#     build_biology_assessment_publish_db.py --evidence-source <색인 source.jsonl>)
+
+# 5) 1학기 DB에 합치기 (같은 파일·같은 과목이 두 차수에 다시 올라온 사례는 뺀다)
+.venv/bin/python scripts/merge_publish_dbs.py --base <1학기 상세 DB> --addition <2학기 상세 DB> --output <합친 DB>
 ```
 
 파서만 바뀌었을 때는 전체를 다시 돌리지 않고 `scripts/refresh_biology_assessment_details.py`로
 발행 DB의 상세 표(`assessment_items` 등)만 다시 만든다. `cases`와 `case_id`는 그대로 유지된다.
+추출원이나 파서를 크게 바꿨으면 `scripts/compare_extraction_sources.py`로 옛 원문과 새 원문을 같은
+파서로 전수 비교해 항목 수 증감과 표 품질(중첩 표·칸 어긋남·태그 노출)을 확인한다.
 
 ## 운영 배포
 

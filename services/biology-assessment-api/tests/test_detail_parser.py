@@ -266,24 +266,29 @@ def test_rubric_table_after_overview_table_stays_a_separate_table() -> None:
     assert rendered.count("</table>") == 2
 
 
-def test_page_break_remainder_is_fused_back_into_its_table() -> None:
+def test_the_next_assessments_table_is_not_fused_into_the_previous_one() -> None:
+    # kordoc keeps a multi-page table whole; a table that follows another with
+    # only blank lines between is the next assessment's table (실측: 서울 한
+    # 학교 계획서의 "기타 사항" 행 뒤 "평가과제(영역)명 | 진로 연계 발표").
     fragment = """
 <table>
-<tr><th>성취수준</th><th>수준 진술문</th></tr>
-<tr><td rowspan="3">A</td><td>구조와 기능을 연결해 설명할 수 있다</td></tr>
+<tr><th>평가과제(영역)명</th><th>심화 주제 탐구 프로젝트</th></tr>
+<tr><td>기타 사항</td><td>▪수행평가 결과물을 백지로 제출한 경우 기본 점수 부여</td></tr>
 </table>
 
 <table>
-<tr><td>구조를 설명할 수 있다</td></tr>
-<tr><td>구조를 나열할 수 있다</td></tr>
+<tr><th>평가과제(영역)명</th><th>진로 연계 발표</th></tr>
+<tr><td>평가시기</td><td>5월</td></tr>
 </table>
 """
 
     rendered = markdown_fragment_to_html(fragment)
 
-    assert rendered.count("<table>") == 1
-    assert rendered.count("</table>") == 1
-    assert "구조를 나열할 수 있다" in rendered
+    assert rendered.count("<table>") == 2
+    assert rendered.count("</table>") == 2
+    first, second = rendered.split("</table>", 1)
+    assert "진로 연계 발표" not in first
+    assert "진로 연계 발표" in second
 
 
 def test_summary_row_with_another_course_code_is_not_published() -> None:
@@ -1343,26 +1348,24 @@ def test_hangul_checkbox_glyph_artifact_restores_check_state() -> None:
     )
 
 
-def test_page_break_split_table_is_rendered_as_one_table() -> None:
-    """A source page break can close a <table> mid-rowspan and reopen a new
-    <table> for the remaining rows. Nothing legitimate separates two tables
-    by blank lines alone, so the renderer fuses them back into one table."""
+def test_each_source_table_keeps_its_own_cells_and_spans() -> None:
+    """The renderer copies a table as kordoc gave it: spans kept, no rows moved."""
 
     fragment = """<table>
-<tr><th>평가 영역명</th><th>혈액형 판정[논술형]</th></tr>
-<tr><td rowspan="5">[12생과02-05] 병원체</td><td>A</td></tr>
-</table>
-
-<table>
-<tr><th>체 반응의 특이성을 이해</th><th>반응의 특이성에 대해</th></tr>
-<tr><td>B</td><td>혈액 응집 반응의 원리</td></tr>
+<tr><th rowspan="2">평가 요소</th><th colspan="2">채점 기준</th><th>배점</th></tr>
+<tr><td>수준</td><td>내용</td><td>100점</td></tr>
+<tr><td rowspan="2">보고서 작성<br>(30점)</td><td>A</td><td>모든 항목을 작성함</td><td>30</td></tr>
+<tr><td>B</td><td>누락된 부분이 1~2개 있음</td><td>28</td></tr>
 </table>
 """
 
     rendered = markdown_fragment_to_html(fragment)
 
-    assert rendered.count("<table") == rendered.count("</table>") == 1
-    assert "체 반응의 특이성을 이해" in rendered
+    assert rendered.count("<table>") == 1
+    assert '<th rowspan="2">평가 요소</th>' in rendered
+    assert '<th colspan="2">채점 기준</th>' in rendered
+    # The old extractor collapsed these rows into one cell ("302826").
+    assert "<td>30</td>" in rendered and "<td>28</td>" in rendered
 
 
 def test_tables_separated_by_other_content_stay_separate() -> None:
@@ -1639,8 +1642,155 @@ def test_bracketed_per_course_h1_bounds_the_subject_section() -> None:
 
     section = parse_assessment_section(source, "과학탐구실험1")
 
-    assert section.boundary_status.startswith("subject_heading:")
+    # The bracketed course name now marks an exact course heading.
+    assert section.boundary_status.startswith(("subject_heading:", "subject_heading_exact:"))
     titles = [item.title for item in section.items if item.extraction_status == "bounded"]
     assert titles == ["패러다임의 전환을 만화로 표현하기", "생활 속의 과학 탐구"]
     assert "등반" not in section.source_markdown
 
+
+
+def test_a_plain_title_line_ending_in_the_bracketed_course_opens_its_section() -> None:
+    # kordoc 는 PDF 표지 제목을 "#" 없는 문단으로 읽는다(서울 개포고 3학년 계획서).
+    source = """
+# 3학년 평가계획
+
+2026학년도 3학년 ( 화학II )
+
+<table>
+<tr><th>평가과제</th><th>산화 환원 적정 실험</th></tr>
+<tr><td>성취기준</td><td>[12화학Ⅱ04-01]</td></tr>
+</table>
+
+2026학년도 3학년 ( 생명과학II )
+
+1. 연간 평가 계획표
+
+<table>
+<tr><th>평가과제</th><th>나의 질문, 생명으로 답하다</th></tr>
+<tr><td>성취기준</td><td>[12생과Ⅱ01-01] 생명과학의 역사를 설명할 수 있다.</td></tr>
+<tr><td>평가 방법</td><td>☑ 서술·논술 □ 구술·발표</td></tr>
+<tr><td>배점</td><td>30점</td></tr>
+</table>
+"""
+
+    section = parse_assessment_section(source, "생명과학Ⅱ")
+
+    assert section.boundary_status.startswith("subject_heading_exact")
+    assert "산화 환원" not in section.source_markdown
+    titles = [item.title for item in section.items if item.extraction_status == "bounded"]
+    assert titles == ["나의 질문, 생명으로 답하다"]
+
+
+def test_a_method_label_merged_over_menu_rows_reads_every_ticked_option() -> None:
+    # kordoc 는 "평가 방법" 칸이 세 행을 덮고, 체크(□V)를 ☑ 로 살려 둔다.
+    source = """
+# 생명과학
+## 수행평가 세부 계획
+<table>
+<tr><th>평가과제</th><th colspan="3">생태계 보전 방안 탐구 보고서</th></tr>
+<tr><td>성취기준</td><td colspan="3">[12생과05-03] 생태계 보전 방안을 제안할 수 있다.</td></tr>
+<tr><td rowspan="3">평가 방법</td><td>□ 서술·논술</td><td>☑ 구술·발표</td><td>□ 토의･토론</td></tr>
+<tr><td>□ 실험･실습</td><td>☑ 포트폴리오</td><td>□ 기타</td></tr>
+<tr><td>☑ 교사 관찰 및 기록</td><td>□ 자기평가</td><td>□ 동료평가</td></tr>
+<tr><td>배점</td><td colspan="3">20점</td></tr>
+</table>
+"""
+
+    items = [
+        item for item in parse_assessment_section(source, "생명과학").items
+        if item.extraction_status == "bounded"
+    ]
+
+    assert [item.title for item in items] == ["생태계 보전 방안 탐구 보고서"]
+    method = items[0].method
+    assert "구술·발표" in method and "포트폴리오" in method and "교사 관찰 및 기록" in method
+    assert "서술·논술" not in method and "동료평가" not in method
+
+
+def test_a_numbered_section_word_does_not_cut_the_task_heading_short() -> None:
+    # 인천 동인천고 PDF: kordoc 는 "1) 평가 개요"를 번호와 한 줄로 낸다.
+    source = """
+# 2026학년도 1학기 ( 생명과학Ⅱ )과 교수학습 및 평가 운영 계획
+
+3. 수행 평가 기준안
+
+### 가. 영역 : 유전 정보의 흐름 탐구
+
+## 1) 평가 개요
+
+<table>
+<tr><th>단원명</th><th>Ⅳ. 유전자의 발현과 조절</th></tr>
+<tr><td>성취기준</td><td>[12생과Ⅱ04-02], [12생과Ⅱ04-03]</td></tr>
+<tr><td>평가유형</td><td>서술형, 논술형</td></tr>
+</table>
+
+## 2) 채점 기준
+
+<table>
+<tr><th>평가 요소</th><th>채점 기준</th><th>배점</th></tr>
+<tr><td>자료해석</td><td>주어진 자료를 90% 이상 올바르게 해석하여 서술한 경우</td><td>15</td></tr>
+</table>
+"""
+
+    titles = [
+        item.title for item in parse_assessment_section(source, "생명과학Ⅱ").items
+        if item.extraction_status == "bounded"
+    ]
+
+    assert titles == ["유전 정보의 흐름 탐구"]
+
+
+def test_title_course_part_reads_the_course_out_of_plan_titles() -> None:
+    from scripts.biology_assessment_detail_parser import _standalone_course_heading as heading
+
+    assert heading(
+        "### 2026학년도 1학기 3학년 생명과학II과 교수ㆍ학습 및 평가 운영 계획"
+    ) == "생명과학Ⅱ"
+    assert heading("## 1 생명과학II과 교수․학습 운영 계획") == "생명과학Ⅱ"
+    assert heading("## 40 생명과학") == "생명과학"
+    assert heading("2026학년도 1학기 생명과학Ⅱ") == "생명과학Ⅱ"
+    # A department plan and a numbered list entry are not course titles.
+    assert heading("생명과학과 평가계획") == ""
+    assert heading("2. 생명과학") == ""
+    assert heading("2026학년도 1학기 지구과학Ⅱ") == ""
+
+
+def test_a_title_box_split_into_headings_keeps_its_course_section() -> None:
+    # 충남 호서고: 표지 상자가 "# 2026학년도 1학기 / # 생명과학 / # 교수학습 평가계획"으로 나뉜다.
+    source = """
+# 2026학년도 1학기
+
+# 생명과학
+
+# 교수학습 평가계획
+
+## Ⅳ. 평가의 종류와 반영비율
+
+<table>
+<tr><th>평가 종류</th><th>정기시험</th><th colspan="2">수행평가</th></tr>
+<tr><td>영역</td><td>1회고사</td><td>식물군집 분석(방형구법)</td><td>혈액형 판정 실험</td></tr>
+<tr><td>반영비율</td><td>40%</td><td>30%</td><td>30%</td></tr>
+<tr><td>성취기준</td><td>-</td><td>[12생과05-01]</td><td>[12생과02-05]</td></tr>
+</table>
+"""
+
+    section = parse_assessment_section(source, "생명과학")
+
+    assert section.boundary_status.startswith("subject_heading_exact")
+    assert "식물군집" in section.source_markdown
+
+
+def test_an_area_score_label_after_an_item_number_names_the_task() -> None:
+    # 경기 역곡고: 첫 칸이 항목 번호 "(1)", 그다음 "영역(만점) │ 세포호흡 설명하기(20)".
+    from scripts.biology_assessment_detail_parser import explicit_segment_title_with_label
+
+    segment = """<table>
+<tr><th>(1)</th><th colspan="2">영역(만점)</th><th colspan="3">세포호흡 설명하기(20)</th></tr>
+<tr><td>성취기준</td><td colspan="5">[12생과Ⅱ03-02] 세포 호흡 과정을 설명할 수 있다.</td></tr>
+</table>"""
+
+    title, label = explicit_segment_title_with_label(segment)
+
+    assert title.startswith("세포호흡 설명하기")
+    assert label == "영역만점"

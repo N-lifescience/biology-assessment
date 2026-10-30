@@ -1,0 +1,12 @@
+{
+  "name": "biology-assessment-kordoc",
+  "private": true,
+  "description": "학교알리미 평가계획 원문(HWP·HWPX·PDF·Office)을 kordoc 블록 구조로 바꾸는 작업자",
+  "type": "module",
+  "dependencies": {
+    "kordoc": "4.24.25"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

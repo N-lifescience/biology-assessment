@@ -89,7 +89,7 @@ GENERIC_TITLE_RE = re.compile(
 )
 EXPLICIT_TITLE_LABEL_RE = re.compile(
     r"^(?:평가영역(?:명|[1-9])?|수행평가(?:명|영역|과제명|과제)|수행과제(?:명)?|"
-    r"평가과제(?:명)?|과제명)$"
+    r"평가과제(?:명)?|과제명|(?:평가)?영역만점|영역명)$"
 )
 # The subset of those labels that names an assessment *area* rather than the
 # task: schools fill these cells with a unit name about as often as a task name.
@@ -444,6 +444,45 @@ def _line_offsets(text: str) -> list[tuple[int, int, str]]:
     return result
 
 
+STANDALONE_TITLE_MAX_CHARS = 60
+LEADING_SECTION_NUMBER_RE = re.compile(r"^\s*(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|\d{1,3}|[가-하])\s*[.)]?\s+")
+COURSE_TITLE_BRACKET_RE = re.compile(
+    r"[\[(（]\s*([^\[\]()（）]{2,20}?)\s*[\])）]\s*(?:과|교과)?\s*"
+    r"(?:교수\s*[·ㆍ‧･・]?\s*학습.*|평가\s*(?:운영\s*)?계획.*)?$"
+)
+
+
+TITLE_PERIOD_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:20\d{2}\s*학년도|\(?\s*[1-3]\s*\)?\s*학년|[12]\s*학기)\s*)*"
+)
+# "생명과학II과 교수ㆍ학습 및 평가 운영 계획": the course name, then "과" and the
+# plan words.  Without "교수학습" the "과" stays: "생명과학과 평가계획" is a
+# department's plan, not the 생명과학 course ("(생명과학)과 …" is matched by
+# COURSE_TITLE_BRACKET_RE instead).
+TITLE_PLAN_SUFFIX_RE = re.compile(
+    r"(?:\s*(?:과|교과))?\s+교수\s*[·ㆍ‧･・․-]?\s*학습\s*(?:(?:및|과)\s*평가\s*)?"
+    r"(?:운영\s*)?(?:계획|방법)\s*(?:서|\(안\))?\s*$"
+    r"|\s+평가\s*(?:운영\s*)?(?:계획|방법)\s*(?:서|\(안\))?\s*$"
+)
+
+
+GENERIC_PLAN_TITLE_RE = re.compile(r"(?:교수학습)?(?:및|과)?(?:평가)?(?:운영)?(?:계획|방법)(?:서|안)?")
+
+
+def title_course_part(shown: str) -> str:
+    """The course name a plan title carries, without number, period and plan words.
+
+    "## 40 생명과학" (a numbered title box), "2026학년도 1학기 생명과학Ⅱ" and
+    "생명과학Ⅱ 교수학습 및 평가 운영 계획" all leave "생명과학Ⅱ"; a sentence
+    leaves itself and so never equals a course name.
+    """
+
+    shown = LEADING_SECTION_NUMBER_RE.sub("", shown)
+    shown = TITLE_PERIOD_PREFIX_RE.sub("", shown)
+    shown = TITLE_PLAN_SUFFIX_RE.sub("", shown)
+    return re.sub(r"\s*\([^)]*(?:학기|개정)[^)]*\)\s*$", "", shown).strip()
+
+
 def _standalone_course_heading(raw: str) -> str:
     """Return a canonical course name from a source-authored Markdown heading.
 
@@ -455,13 +494,26 @@ def _standalone_course_heading(raw: str) -> str:
     """
 
     match = re.match(r"^\s*#{1,3}\s+(.+?)\s*$", raw)
-    if not match:
+    stripped = raw.strip()
+    if match:
+        shown = visible_text(match.group(1))
+    elif _plain_title_line(raw):
+        # kordoc reads many PDF title lines as plain paragraphs ("2026학년도
+        # 3학년 ( 생명과학II )"), so a short line outside any table counts too.
+        shown = visible_text(stripped)
+    else:
         return ""
-    shown = visible_text(match.group(1))
-    shown = re.sub(r"\s*\([^)]*(?:학기|개정)[^)]*\)\s*$", "", shown).strip()
-    key = compact_text(shown)
+    if TOC_LINE_RE.search(shown):
+        return ""
+    bracketed = COURSE_TITLE_BRACKET_RE.search(shown)
+    key = compact_text(title_course_part(shown))
     for course in EXPECTED_STANDARD_PREFIXES:
         if key == compact_text(course):
+            return course
+        # "( 생명과학II )", "2026학년도 1학기 (생명과학Ⅱ)과 교수학습 및 평가 계획":
+        # the bracketed name must be exactly this course, so "(고급 생명과학)"
+        # never opens a 생명과학 section.
+        if bracketed and compact_text(bracketed.group(1)) == compact_text(course):
             return course
     return ""
 
@@ -628,28 +680,88 @@ def _exact_section_bounds(
     for line_index in range(start_index + 1, end_index):
         raw = lines[line_index][2]
         heading = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", raw)
-        if not heading or len(heading.group(1)) > start_level:
+        if not heading:
+            # kordoc reads many PDF title lines as plain paragraphs; a short
+            # one naming another course still opens that course
+            # ("2026학년도 1학기 지구과학Ⅱ", "(체육1)과 교수학습 계획서").
+            if _plain_title_line(raw):
+                shown = visible_text(raw)
+                other = compact_text(title_course_part(shown))
+                if _opens_other_bracketed_course(shown, target) or (
+                    other != target and OTHER_COURSE_HEADING_RE.fullmatch(other)
+                ):
+                    end_index = line_index
+                    break
+            continue
+        if len(heading.group(1)) > start_level:
             continue
         shown = visible_text(heading.group(2))
         compact = compact_text(shown)
         if target in compact:
             continue
+        if _opens_other_bracketed_course(shown, target):
+            end_index = line_index
+            break
         opens_course_plan = (
             "교수학습" in compact
             and "평가" in compact
             and any(term in compact for term in ("계획", "운영", "방법"))
+            # "# 교수학습 평가계획" right under "# 생명과학" is this plan's own
+            # title box split into lines; only a title naming something opens
+            # another course's plan.
+            and not GENERIC_PLAN_TITLE_RE.fullmatch(
+                compact_text(TITLE_PERIOD_PREFIX_RE.sub("", shown))
+            )
         )
         # ``# 체육`` / ``# 화학`` after ``# 생명과학``: a peer heading as
         # short as a course name, with none of the words a section inside
         # one course plan would carry, opens the next course.
         opens_other_course = (
             len(heading.group(1)) <= start_level
-            and bool(OTHER_COURSE_HEADING_RE.fullmatch(compact))
+            and bool(OTHER_COURSE_HEADING_RE.fullmatch(compact_text(title_course_part(shown))))
         )
         if opens_course_plan or opens_other_course:
             end_index = line_index
             break
     return start_index, end_index, start_level
+
+
+_NON_COURSE_BRACKET_RE = re.compile(r"학기|학년|\d+\s*(?:점|%|회|차)|예시|공통|선택|필수")
+
+
+def _plain_title_line(raw: str) -> bool:
+    """A short paragraph line that may be a title kordoc did not mark as one.
+
+    Numbered lines ("2. 생명과학") are list or table-of-contents entries and
+    never count; only a ``#`` heading may carry a section number.
+    """
+
+    stripped = raw.strip()
+    return (
+        bool(stripped)
+        and len(stripped) <= STANDALONE_TITLE_MAX_CHARS
+        and not stripped.startswith(("<", "|", "[zip:", "#"))
+        and not LEADING_SECTION_NUMBER_RE.match(stripped)
+    )
+
+
+def _opens_other_bracketed_course(shown: str, target: str) -> bool:
+    """"2026학년도 1학기 (체육1)과 교수학습 계획서": a title naming a different course.
+
+    The bracketed name must be a known course name, or the line must carry the
+    words of a course-plan title; "(30%)", "(2학기)" or "(예시)" never qualify.
+    """
+
+    bracket = COURSE_TITLE_BRACKET_RE.search(shown)
+    if not bracket:
+        return False
+    name = compact_text(bracket.group(1))
+    if not name or name == target or target in name or _NON_COURSE_BRACKET_RE.search(bracket.group(1)):
+        return False
+    if OTHER_COURSE_HEADING_RE.fullmatch(name):
+        return True
+    compact = compact_text(shown)
+    return len(re.findall(r"[가-힣]", name)) >= 2 and ("교수학습" in compact or "평가계획" in compact)
 
 
 def _subject_section_end(lines: list[tuple[int, int, str]], search_from: int, target: str) -> int:
@@ -1465,6 +1577,10 @@ def _heading_candidates(block: str) -> list[tuple[int, int, str, str]]:
                 ITEM_PREFIX_RE.match(visible_text(raw))
                 and _valid_title(title)
                 and not PROSE_CLAUSE_RE.search(title)
+                # kordoc keeps a sub-heading's number on its line ("1) 평가 개요",
+                # "2) 채점 기준"); such a section word must not cut the task
+                # heading above it ("가. 영역 : 유전 정보의 흐름 탐구") short.
+                and not heading_title_is_structural(title, policy_prose=False)
             ):
                 preliminary.append((index, start, title, title_raw))
         table_depth += opens - closes
@@ -2513,9 +2629,44 @@ def _joined_field_value(key: str, values: list[str]) -> str:
     return joined
 
 
+_METHOD_BOX_SPLIT_RE = re.compile(r"(?=[☑□■])")
+
+
+def _ticked_method_values(values: list[str]) -> list[str]:
+    """Keep only the ticked options of a 평가 방법 checkbox menu.
+
+    kordoc keeps the tick ("□V" → ``☑``), so a menu row is
+    "☑ 서술·논술 □ 구술·발표 □ 토의･토론"; taking the whole row would read as if
+    every option were chosen and soon overflows the field's length cap.  Rows
+    without any box are values the school typed, kept as they are; a row of
+    empty boxes contributes only the text before its first box (that option's
+    own tick was lost), the same rule ``app.repository.display_methods`` uses.
+    """
+
+    if not any("☑" in value for value in values):
+        out = []
+        for value in values:
+            if "□" in value:
+                leading = value.split("□", 1)[0].strip(" ·|")
+                if leading:
+                    out.append(leading)
+            else:
+                out.append(value)
+        return out
+    ticked: list[str] = []
+    for value in values:
+        for segment in _METHOD_BOX_SPLIT_RE.split(value):
+            segment = segment.strip(" ·|")
+            if segment.startswith("☑") and segment.strip("☑ ·|"):
+                ticked.append(segment)
+    return ticked
+
+
 def _exact_fields(segment: str) -> dict[str, object]:
     found: dict[str, list[str]] = {key: [] for key in FIELD_LABELS}
-    for rows in _source_tables(segment):
+    # Spans expanded: a label merged over three rows (평가 방법 over a three-row
+    # checkbox menu) labels every one of those rows, not only the first.
+    for rows in _grid_tables(segment):
         for row_index, row in enumerate(rows):
             labels = [compact_text(cell) for cell in row]
             for key, wanted in FIELD_LABELS.items():
@@ -2536,8 +2687,10 @@ def _exact_fields(segment: str) -> dict[str, object]:
                         if candidate and candidate_label != label:
                             same_row.append(candidate)
                     if same_row:
-                        if key == "method" and any("☑" in value for value in same_row):
-                            same_row = [value for value in same_row if "☑" in value]
+                        if key == "method":
+                            # An all-empty menu yields nothing; it is still this
+                            # row's value, not a header over the next row.
+                            same_row = _ticked_method_values(same_row)
                         found[key].extend(same_row)
                     else:
                         # PDF extraction also produces a pure multi-field header
@@ -2551,6 +2704,10 @@ def _exact_fields(segment: str) -> dict[str, object]:
                                 continue
                             found[key].append(candidate)
                             break
+    if any("☑" in value for value in found["method"]):
+        # Once any row is a ticked menu, the 평가 방법 prose rows beside it
+        # ("범위: 전범위 …") and stray labels are not the chosen methods.
+        found["method"] = [value for value in found["method"] if "☑" in value]
     standards = _unique_values(biology_standard_codes(visible_text(segment)), 24)
     return {
         key: _joined_field_value(key, [v for v in values if _field_value_is_usable(key, v)])
@@ -2621,46 +2778,13 @@ def markdown_fragment_to_html(markdown: str) -> str:
                 index += 1
                 if depth <= 0:
                     break
-            merged = "\n".join(chunk)
-            # A source page break can close a <table> mid-row -- commonly
-            # mid-rowspan -- and reopen a fresh <table> for the remaining
-            # rows.  Fuse that continuation back into one table.  But the HWP
-            # converter also emits the overview table and the rubric table of
-            # one assessment back to back with only blank lines between them,
-            # so fuse only when the next table looks like a continuation: its
-            # first row is not a header row and is no wider than this table.
-            while index < len(lines):
-                lookahead = index
-                while lookahead < len(lines) and not lines[lookahead].strip():
-                    lookahead += 1
-                if lookahead >= len(lines) or not re.match(
-                    r"\s*<table\b", lines[lookahead], flags=re.I
-                ):
-                    break
-                next_chunk: list[str] = []
-                depth = 0
-                cursor = lookahead
-                while cursor < len(lines):
-                    current = lines[cursor]
-                    next_chunk.append(current)
-                    depth += len(re.findall(r"<table\b", current, flags=re.I))
-                    depth -= len(re.findall(r"</table>", current, flags=re.I))
-                    cursor += 1
-                    if depth <= 0:
-                        break
-                if not _looks_like_table_continuation(merged, "\n".join(next_chunk)):
-                    break
-                merged = re.sub(r"</table>\s*$", "", merged.rstrip())
-                continuation = re.sub(
-                    r"^\s*<table\b[^>]*>",
-                    "",
-                    "\n".join(next_chunk).lstrip(),
-                    count=1,
-                    flags=re.I,
-                )
-                merged = merged + "\n" + continuation
-                index = cursor
-            output.append(sanitize_table_html(merged))
+            # Every source table is published as its own table.  The old
+            # extractor split tables at page breaks and this function guessed
+            # which neighbours to fuse; kordoc keeps a table whole, and the
+            # back-to-back pairs it does emit are nearly always the next
+            # assessment's table ("평가과제(영역)명 | …"), which fusing would
+            # wrongly attach to the previous one.
+            output.append(sanitize_table_html("\n".join(chunk)))
             continue
         if (
             line.strip().startswith("|")
@@ -2695,53 +2819,6 @@ def markdown_fragment_to_html(markdown: str) -> str:
             output.append(f"<p>{_inline_html(stripped)}</p>")
         index += 1
     return balance_table_tags("\n".join(output))
-
-
-def _table_row_width(row_html: str) -> int:
-    width = 0
-    for match in re.finditer(r"<t[dh]\b([^>]*)>", row_html, flags=re.I):
-        span = re.search(r"colspan\s*=\s*[\"']?(\d+)", match.group(1), flags=re.I)
-        width += int(span.group(1)) if span else 1
-    return width
-
-
-TABLE_HEADER_LABEL_RE = re.compile(
-    r"(평가요소|평가영역|영역명|채점기준|평가기준|세부기준|성취기준|성취수준|배점|점수|척도|등급|"
-    r"수준|횟수|반영비율|평정점|평가방법|평가유형|평가시기|수행과제|과제명|평가내용|평가항목)"
-)
-
-
-def _looks_like_table_continuation(table_html: str, next_table_html: str) -> bool:
-    """True when ``next_table_html`` is the page-break remainder of ``table_html``.
-
-    A genuine second table (the rubric after the overview, a new assessment)
-    opens with a header row of short field labels -- 평가요소 | 횟수 | 배점 ... --
-    or has a different column count from the table before it.  A page-break
-    remainder does neither: its first row carries sentence fragments cut by the
-    page break, and it is never wider than the table it continues.
-    """
-
-    next_row = re.search(r"<tr\b.*?</tr>", next_table_html, flags=re.I | re.S)
-    if next_row is None:
-        return False
-    cells = re.findall(r"<(t[dh])\b[^>]*>(.*?)</t[dh]>", next_row.group(0), flags=re.I | re.S)
-    all_header_cells = bool(cells) and all(tag.lower() == "th" for tag, _ in cells)
-    label_cells = [
-        compact_text(visible_text(text))
-        for _, text in cells
-        if TABLE_HEADER_LABEL_RE.search(compact_text(visible_text(text)))
-        and len(compact_text(visible_text(text))) <= 12
-    ]
-    if all_header_cells and label_cells:
-        return False
-    previous_rows = re.findall(r"<tr\b.*?</tr>", table_html, flags=re.I | re.S)
-    previous_width = max((_table_row_width(row) for row in previous_rows), default=0)
-    next_width = _table_row_width(next_row.group(0))
-    if next_width > previous_width:
-        return False
-    if all_header_cells and next_width != previous_width:
-        return False
-    return True
 
 
 def balance_table_tags(value: str) -> str:

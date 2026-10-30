@@ -27,14 +27,21 @@
 발행 DB는 `services/biology-assessment-api/data/`의 gz 조각으로 저장소에 있고, 로컬에서는
 `data/publish/biology_assessment_catalog_detail.sqlite`로 풀어 쓴다(README "로컬 실행과 검증").
 
-- 원문 표가 깨져 보이면 두 층을 따로 본다. 화면 층은
-  `apps/biology-assessment-web/app/lib/source-table-segmentation.ts`(테스트 동봉), 데이터 층은
-  `scripts/biology_assessment_detail_parser.py`의 `markdown_fragment_to_html`(표 융합 판정)이다.
-  데이터 층을 고쳤으면 `scripts/refresh_biology_assessment_details.py`로 상세 표만 다시 만들고
+- 원문 표는 세 층으로 본다(2026-10-30 kordoc 전환).
+  1. 추출: `scripts/extract_kordoc_documents.py`가 `tools/kordoc/worker.mjs`(kordoc 버전 고정)로 원문을
+     블록 구조(셀 격자·병합 칸·셀 속 표)로 읽어 `data/derived/kordoc/`에 저장한다. 표를 글로 뭉개지 않는다.
+  2. 흐름: `scripts/kordoc_flow.py`가 틀 표를 풀고, 제목 상자를 제목으로, 칸 속 큰 표(루브릭)는
+     바깥 표 뒤로 꺼내고, 작은 메뉴 표는 칸 글로, `□V`는 `☑`로 바꿔 파서 입력 텍스트를 만든다.
+     파서에 들어가는 표에는 중첩 표가 없다. 규칙을 고치면 `test_kordoc_flow.py`에 실제 모양 테스트를 넣는다.
+  3. 화면: `apps/biology-assessment-web/app/lib/source-html.ts`는 허용 목록 정화와 표시만 한다.
+     행을 옮기거나 표를 합치는 DOM 수술을 다시 넣지 않는다. 표가 이상하면 1·2층을 고친다.
+  `markdown_fragment_to_html`은 표를 하나씩 그대로 옮긴다(옛 표 융합 판정은 다음 과제 표를 앞 표에
+  붙이는 오류를 내서 지웠다). 데이터 층을 고쳤으면 `scripts/refresh_biology_assessment_details.py
+  --evidence-source data/derived/kordoc_evidence_source_2026_1.jsonl`로 상세 표만 다시 만들고
   `npm run audit:data`, `npm run audit:renderer`, `npm run package:vercel`, `npm run stage:vercel`
   순으로 배포 패키지를 갱신한다.
-- 화면 층 수정은 전 항목 jsdom 감사로 효과를 잰다(`npm run audit:renderer`는 예외만 세고,
-  라벨 오분류 같은 품질 지표는 별도 스크립트로 센다).
+- 추출원을 바꾸거나 파서를 크게 고치면 `scripts/compare_extraction_sources.py`로 같은 파서·두 원문을
+  전수 비교한다(항목 수 증감과 표 품질 지표). 줄어든 사례는 하나씩 열어 본다.
 - 2학기(정시 3차) 원문 수집과 맥 추출 절차는 README "2학기 공시 갱신 절차"를 따른다.
 
 # 파서 품질 작업 절차 (2026-09-15)
