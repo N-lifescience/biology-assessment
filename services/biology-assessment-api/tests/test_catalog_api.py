@@ -16,15 +16,40 @@ def test_subjects_expose_all_course_groups_and_keep_ambiguity_separate() -> None
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["total"] == 9
+    assert payload["total"] == 13
     assert any(
-        item["curriculum"] == "2022" and item["subject"] == "생명과학" and item["documents"] == 1690
+        item["curriculum"] == "2022" and item["subject"] == "생명과학" and item["documents"] == 1656
         for item in payload["items"]
     )
+    # 2026-10-31에 더한 2022 개정 과목(주로 2학기 공시). 11-01 중복 제거 뒤 건수.
+    documents = {
+        item["subject"]: item["documents"]
+        for item in payload["items"]
+        if item["curriculum"] == "2022"
+    }
+    assert documents["세포와 물질대사"] == 1246
+    assert documents["생물의 유전"] == 156
+    assert documents["통합과학2"] == 2139
+    assert documents["과학탐구실험2"] == 1650
     # No 2015/2022-ambiguous subject exists in the current collection: every
     # subject name in the target course groups maps to exactly one curriculum.
     assert not any(item["curriculum_ambiguous"] for item in payload["items"])
     assert "뜻이 아닙니다" in payload["caution"]
+
+
+def test_subject_option_counts_match_the_listed_cases() -> None:
+    # 과목 선택지의 "N건"은 그 과목을 고른 뒤 목록 머리에 나오는 건수와 같아야 한다.
+    items = client.get("/api/v1/subjects").json()["items"]
+    for item in items:
+        # 전문교과(specialized)는 교육과정 필터 값이 없어 과목만으로 고른다.
+        curriculum = (
+            {"curriculum": item["curriculum"]} if item["curriculum"] in {"2015", "2022"} else {}
+        )
+        listed = client.get("/api/v1/cases", params={
+            **curriculum, "subject": item["subject"], "limit": 1,
+        }).json()["total"]
+        assert item["published_documents"] == listed, item["subject"]
+        assert item["published_documents"] <= item["documents"]
 
 
 def test_trends_return_verified_subject_counts_and_action_tags() -> None:
@@ -35,14 +60,14 @@ def test_trends_return_verified_subject_counts_and_action_tags() -> None:
 
     assert biology.status_code == 200
     biology_item = biology.json()["items"][0]
-    assert biology_item["documents"] == 1690
+    assert biology_item["documents"] == 1656
     assert biology_item["coverage"]["found"] == 1477
     assert biology_item["small_sample"] is False
     assert any(tag["tag"] == "탐구" for tag in biology_item["action_tags"])
 
     assert biology_one.status_code == 200
     biology_one_item = biology_one.json()["items"][0]
-    assert biology_one_item["documents"] == 95
+    assert biology_one_item["documents"] == 92
     assert biology_one_item["small_sample"] is False
 
 
@@ -88,7 +113,8 @@ def test_cases_support_the_whole_library_without_course_filters() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert 0 < payload["total"] < 8800
+    # 공개 목록은 전체 사례(14,321건)보다 적다: 과목 경계를 확인하지 못한 사례는 빠진다.
+    assert 0 < payload["total"] < 14321
     assert len({(item["curriculum"], item["subject"]) for item in payload["items"]}) >= 1
     assert all(
         item["assessment_structure"]["basis"] == "source_detail"

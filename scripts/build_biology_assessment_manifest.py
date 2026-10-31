@@ -17,6 +17,10 @@ from pathlib import Path
 
 
 ALIASES: list[tuple[str, str, str]] = [
+    # 2022 진로 선택.  파일 이름에 교과명이 함께 붙어도("생명과학(세포와
+    # 물질대사)") 과목을 가리키는 것은 과목명이므로 ``생명과학``보다 먼저 본다.
+    ("세포와 물질대사", "세포와 물질대사", r"세포\s*와\s*물질\s*대사"),
+    ("생물의 유전", "생물의 유전", r"생물\s*의\s*유전"),
     ("고급생명과학", "고급생명과학", r"고급\s*생명\s*과학"),
     ("생명과학실험", "생명과학실험", r"생명\s*과학\s*실험"),
     # ``II`` has to stay an alternation.  As the character class ``[ⅡII2]`` a
@@ -25,12 +29,12 @@ ALIASES: list[tuple[str, str, str]] = [
     ("생명과학Ⅱ", "생명과학Ⅱ", r"생명\s*과학\s*(?:Ⅱ|II|2)"),
     ("생명과학Ⅰ", "생명과학Ⅰ", r"생명\s*과학\s*(?:Ⅰ|I|1)"),
     ("생명과학", "생명과학", r"생명\s*과학(?!\s*[ⅠⅡI12])"),
+    # ``II`` stays an alternation for the same reason as 생명과학Ⅱ above.
+    ("과학탐구실험2", "과학탐구실험2", r"과학\s*탐구\s*실험\s*(?:Ⅱ|II|2)"),
     ("과학탐구실험1", "과학탐구실험1", r"과학\s*탐구\s*실험\s*[ⅠI1]"),
     ("과학탐구실험", "과학탐구실험", r"과학\s*탐구\s*실험(?!\s*[ⅠⅡI12])"),
+    ("통합과학2", "통합과학2", r"통합\s*과학\s*(?:Ⅱ|II|2)"),
     ("통합과학1", "통합과학1", r"통합\s*과학\s*[ⅠI1]"),
-    # ``통합과학2`` is outside the published subject scope; the negative
-    # lookahead lets it fall through to the generic alias instead of being
-    # mislabelled as the 2015 single-course ``통합과학``.
     ("통합과학", "통합과학", r"통합\s*과학(?!\s*[ⅠⅡI12])"),
     ("과학", "과학", r"과학"),
 ]

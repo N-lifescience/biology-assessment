@@ -11,12 +11,15 @@ import tempfile
 from pathlib import Path
 
 from biology_subject_aliases import SUBJECT_PATTERNS
+from build_biology_assessment_manifest import classify as classify_filename
 
 
 CODE_KEYS = {
     "통합과학": "통과", "과학탐구실험": "과탐",
     "생명과학Ⅰ": "생과Ⅰ", "생명과학Ⅱ": "생과Ⅱ",
     "통합과학1": "통과1", "과학탐구실험1": "과탐1", "생명과학": "생과",
+    "통합과학2": "통과2", "과학탐구실험2": "과탐2",
+    "세포와 물질대사": "세포", "생물의 유전": "유전",
     "생명과학실험": "생실", "고급생명과학": "고생",
 }
 
@@ -37,7 +40,10 @@ def evidence_strength(record: dict[str, object]) -> tuple[int, list[str]]:
     text = str(record.get("evidence_text") or "")
     reasons: list[str] = []
     strength = 0
-    if source.get("match_type") == "filename_alias" and source.get("subject_canonical") == subject:
+    # The file name is classified here rather than read from the source row:
+    # 1학기 rows carry the 수학 판 manifest's labels, and rows extracted before
+    # a course entered the scope carry the labels of that older alias list.
+    if classify_filename(str(source.get("candidate_name") or ""))[1] == subject:
         strength += 5
         reasons.append("filename_alias")
     code_key = CODE_KEYS.get(subject)

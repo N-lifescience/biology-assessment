@@ -25,7 +25,8 @@ SUBJECTS: dict[str, tuple[str, ...]] = {
         "통합과학", "과학탐구실험", "생명과학Ⅰ", "생명과학Ⅱ",
     ),
     "2022": (
-        "통합과학1", "과학탐구실험1", "생명과학",
+        "통합과학1", "통합과학2", "과학탐구실험1", "과학탐구실험2", "생명과학",
+        "세포와 물질대사", "생물의 유전",
     ),
     # 과학계열 전문교과.  These belong to neither revision bucket: schools offer
     # them alongside either curriculum, so they are tracked as their own bucket

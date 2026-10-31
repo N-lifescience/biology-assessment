@@ -40,7 +40,24 @@ def _columns(connection: sqlite3.Connection, table: str, schema: str = "main") -
     return [row[1] for row in connection.execute(f"PRAGMA {schema}.table_info({table})")]
 
 
-def merge(base: Path, addition: Path, output: Path) -> dict:
+def _shared_columns(connection: sqlite3.Connection, table: str) -> str:
+    """Columns both DBs have.  ``subject_alignment`` is added to a DB only when it
+    is annotated, so a freshly built addition lacks it; the merged rows get NULL
+    there until the merged DB is annotated again."""
+
+    addition = set(_columns(connection, table, "addition"))
+    return ", ".join(name for name in _columns(connection, table) if name in addition)
+
+
+def merge(base: Path, addition: Path, output: Path, subjects: list[str] | None = None) -> dict:
+    """Add the addition's new cases to a copy of ``base``.
+
+    ``subjects`` limits the addition to those courses.  It is how a course that
+    newly entered the scope is added to a round already merged: the round is
+    rebuilt with the wider scope and only the new courses are taken from it, so
+    the published cases of the other courses stay as they were.
+    """
+
     if output.resolve() in (base.resolve(), addition.resolve()):
         raise SystemExit("--output must differ from both inputs")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -49,8 +66,11 @@ def merge(base: Path, addition: Path, output: Path) -> dict:
     connection.execute("ATTACH DATABASE ? AS addition", (str(addition),))
     try:
         before = connection.execute("SELECT COUNT(*) FROM cases").fetchone()[0]
+        subject_filter = (
+            f"AND a.subject IN ({','.join('?' * len(subjects))})" if subjects else ""
+        )
         connection.execute(
-            """
+            f"""
             CREATE TEMP TABLE new_cases AS
             SELECT a.case_id FROM addition.cases a
             WHERE NOT EXISTS (SELECT 1 FROM main.cases m WHERE m.case_id = a.case_id)
@@ -58,35 +78,51 @@ def merge(base: Path, addition: Path, output: Path) -> dict:
                 SELECT 1 FROM main.cases m
                 WHERE m.source_sha256 = a.source_sha256 AND m.subject = a.subject
               )
-            """
+              {subject_filter}
+            """,
+            subjects or [],
         )
         skipped = connection.execute(
-            "SELECT COUNT(*) FROM addition.cases WHERE case_id NOT IN (SELECT case_id FROM new_cases)"
+            "SELECT COUNT(*) FROM addition.cases a WHERE case_id NOT IN (SELECT case_id FROM new_cases) "
+            + subject_filter,
+            subjects or [],
         ).fetchone()[0]
-        columns = ", ".join(_columns(connection, "cases"))
+        columns = _shared_columns(connection, "cases")
         connection.execute(
             f"INSERT INTO main.cases ({columns}) SELECT {columns} FROM addition.cases "
             "WHERE case_id IN (SELECT case_id FROM new_cases)"
         )
-        status_columns = ", ".join(_columns(connection, "case_detail_status"))
+        status_columns = _shared_columns(connection, "case_detail_status")
         connection.execute(
             f"INSERT INTO main.case_detail_status ({status_columns}) SELECT {status_columns} "
             "FROM addition.case_detail_status WHERE case_id IN (SELECT case_id FROM new_cases)"
         )
-        item_columns = ", ".join(_columns(connection, "assessment_items"))
+        item_columns = _shared_columns(connection, "assessment_items")
         connection.execute(
             f"INSERT INTO main.assessment_items ({item_columns}) SELECT {item_columns} "
             "FROM addition.assessment_items WHERE case_id IN (SELECT case_id FROM new_cases)"
         )
         for table in ("assessment_item_rankings", "assessment_item_axes"):
-            table_columns = ", ".join(_columns(connection, table))
+            table_columns = _shared_columns(connection, table)
             connection.execute(
                 f"INSERT INTO main.{table} ({table_columns}) SELECT {table_columns} FROM addition.{table} "
                 "WHERE item_id IN (SELECT item_id FROM addition.assessment_items "
                 "WHERE case_id IN (SELECT case_id FROM new_cases))"
             )
         added = connection.execute("SELECT COUNT(*) FROM new_cases").fetchone()[0]
-        recompute_subject_stats(connection, {row[0] for row in connection.execute("SELECT case_id FROM new_cases")})
+        # A course the base has no statistics for takes its school coverage
+        # from the round that brought it in.
+        connection.row_factory = sqlite3.Row
+        addition_stats = {
+            (row["curriculum"], row["subject"]): dict(row)
+            for row in connection.execute("SELECT * FROM addition.subject_stats")
+        }
+        connection.row_factory = None
+        recompute_subject_stats(
+            connection,
+            {row[0] for row in connection.execute("SELECT case_id FROM new_cases")},
+            addition_stats,
+        )
         connection.commit()
         connection.execute("DETACH DATABASE addition")
         connection.execute("VACUUM")
@@ -96,7 +132,11 @@ def merge(base: Path, addition: Path, output: Path) -> dict:
     return {"base_cases": before, "added_cases": added, "skipped_same_document": skipped, "cases": after}
 
 
-def recompute_subject_stats(connection: sqlite3.Connection, added_case_ids: set[str] | None = None) -> None:
+def recompute_subject_stats(
+    connection: sqlite3.Connection,
+    added_case_ids: set[str] | None = None,
+    fallback_stats: dict[tuple[str, str], dict] | None = None,
+) -> None:
     """Recount ``subject_stats``/``subject_action_tags`` over ``cases``.
 
     ``task_name_candidates`` is the number of task names the published cases
@@ -120,7 +160,7 @@ def recompute_subject_stats(connection: sqlite3.Connection, added_case_ids: set[
     tag_rows = []
     for key, rows in sorted(groups.items()):
         curriculum, subject = key
-        previous = old.get(key, {})
+        previous = old.get(key) or (fallback_stats or {}).get(key, {})
         schools = len({(row["school_name"], row["region"]) for row in rows})
         years = sorted({int(year) for row in rows for year in json.loads(row["academic_years_json"] or "[]")})
         grades = [set(json.loads(row["grades_json"] or "[]")) for row in rows]
@@ -178,8 +218,10 @@ def main() -> None:
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--addition", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--subject", action="append", default=[],
+                        help="take only this course's cases from --addition; repeatable")
     args = parser.parse_args()
-    print(json.dumps(merge(args.base, args.addition, args.output), ensure_ascii=False))
+    print(json.dumps(merge(args.base, args.addition, args.output, args.subject or None), ensure_ascii=False))
 
 
 if __name__ == "__main__":

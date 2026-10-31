@@ -26,21 +26,48 @@ MASK = "○○○"
 # "공동 채점교사", "교과담당교사"), not a bare "교사:" that opens a sentence
 # about what the teacher does in class ("교사: 학생 간의 상호작용 관찰").
 TEACHER_LABEL = (
-    r"(?:지도|담당|교과\s*담당|수업\s*담당|평가|출제|채점|공동\s*채점|검토|담임)\s*교\s*사(?:\s*명)?"
+    r"(?:지도|담당|교과\s*담당|수업\s*담당|평가|출제|채점|공동\s*(?:채점|출제)|검토|담임"
+    # "보충지도 수업 교사 │ 홍길동", "평가 및 기록: 교사 홍길동"(일화기록 서식)
+    r"|보충\s*(?:지도\s*)?(?:수업\s*)?|기록\s*[:：]\s*)\s*교\s*사(?:\s*명)?"
     r"|교\s*사\s*명"
 )
 NAME = r"(?<![가-힣0-9])[가-힣]{2,4}(?![가-힣ⅠⅡⅢ0-9])"
+# "김민주 (1학년), 김진옥 (2,3학년)", "신용주(국악과)": a tag on each name.
+TAGGED_NAME = NAME + r"(?:\s*\([^()<>]{1,12}\))?"
+NAME_LIST = TAGGED_NAME + r"(?:(?:\s*[,，]\s*|/\s*|·)" + TAGGED_NAME + ")*"
+# "지도교사(강사)": a role tag after the title.
+ROLE_TAG = r"(?:\s*\([가-힣]{1,4}\))?"
 LABEL_THEN_NAMES_RE = re.compile(
-    "((?:" + TEACHER_LABEL + r")\s*(?:[:：]\s*(?:/\s*)?|\s·\s+|(?:</t[dh]>|<br\s*/?>)\s*(?:<t[dh][^>]*>)?\s*"
+    "((?:" + TEACHER_LABEL + ")" + ROLE_TAG + r"\s*(?:[:：]\s*(?:/\s*)?(?:</t[dh]>\s*<t[dh][^>]*>\s*)?|\s·\s+"
+    r"|(?:</t[dh]>|<br\s*/?>)\s*(?:<t[dh][^>]*>)?\s*"
     # …also a table the converter escaped into a cell ("&lt;td&gt;담당교사&lt;/td&gt;&lt;td&gt;…")
     r"|&lt;/t[dh]&gt;\s*(?:&lt;t[dh][^&]*&gt;)?\s*|\s+))"
     # " · " between names is a cell boundary in flattened text, not a list.
-    "(" + NAME + r"(?:(?:\s*[,，]\s*|/\s*|·)" + NAME + ")*)"
+    "(" + NAME_LIST + ")"
 )
+# "담당교사 홍길동 김은정 / …": names spaced apart to the end of a flattened row.
+SPACED_ROW_NAMES_RE = re.compile(
+    # (a name the label rule already masked still belongs to the run)
+    "((?:" + TEACHER_LABEL + ")" + ROLE_TAG + r"\s+)((?:(?:[가-힣]{3}|○○○)\s+)+(?:[가-힣]{3}|○○○))"
+    r"(?=\s*(?: / |\n|\|\||$))"
+)
+# "<p>1. 담당교사</p><p>김동연</p>": the title and the names in two paragraphs
+# (or headings: "<h4>1. 담당교사</h4><h4>김동연</h4>").
+# Only a paragraph that holds nothing but names counts.
+PARAGRAPH_LABEL_THEN_NAMES_RE = re.compile(
+    "((?:" + TEACHER_LABEL + r")\s*[:：]?\s*</(?:p|h[1-6])>\s*<(?:p|h[1-6])\b[^>]*>\s*)(" + NAME_LIST + r")"
+    r"(?=\s*</(?:p|h[1-6])>)"
+)
+# "강정민 (인)": a name before a seal mark is a signature wherever it stands
+# (also in a case summary that lost the table it was signed in).
+SEAL_NAME_RE = re.compile(r"(?<![가-힣])([가-힣]{2,4})(\s*\(인\))")
+# A form's blank signature line ("성명 (인)", "보호자 (인)") names nobody.
+SEAL_FIELD_WORDS = frozenset({"성명", "이름", "서명", "보호자", "학부모", "담임", "교사", "학생", "확인"})
+BRACKETED_RE = re.compile(r"\([^()]*\)")
 # A table column or row headed by a teacher title ("지도교사", "담당 교사",
 # "출제교사"): its cells that hold only names are the teachers.
 TEACHER_HEADER_RE = re.compile(
-    r"(?:지도|담당|교과담당|수업담당|평가|출제|채점|공동채점|담임)?교사(?:명)?|담당|성명"
+    r"(?:지도|담당|교과담당|수업담당|평가|출제|채점|공동채점|공동출제|담임)?교사(?:명)?(?:\([가-힣]{1,4}\))?|담당|성명"
 )
 TABLE_RE = re.compile(r"<table\b[^>]*>.*?</table>", re.S | re.I)
 ROW_RE = re.compile(r"(<tr\b[^>]*>)(.*?)(</tr>)", re.S | re.I)
@@ -71,23 +98,33 @@ def _is_name(word: str, *, listed: bool = False) -> bool:
     # Column labels a header row puts beside the teacher column ("평가영역",
     # "주당시수", "과목유형", "교무부장").
     if word in NOT_A_NAME or re.search(
-        r"^(?:평가|학습|수업|교과|운영|주당|교육|담당|과목|성취|이수|교무)"
-        r"|(?:시수|학점|비고|기타|학급|유형|과정|부장|여부|편제|단계|등급|방법|영역|기준|목표|계획)$",
+        # Not "이수": 이수현 is a name; 이수학점·이수단위·이수시간 end in a column word.
+        r"^(?:평가|학습|수업|교과|운영|주당|교육|담당|과목|성취|교무)"
+        r"|(?:시수|학점|단위|시간|비고|기타|학급|유형|과정|부장|여부|편제|단계|등급|방법|영역|기준|목표|계획)$",
         word,
     ):
         return False
     return listed or not re.search(r"(?:을|를|의|에|로|와|과|이|가|은|는|하여|하고)$", word)
 
 
+def _seal_name(word: str) -> bool:
+    return word not in SEAL_FIELD_WORDS and _is_name(word, listed=True)
+
+
 def _listed(match: re.Match[str]) -> bool:
     return bool(
-        re.search(r"[:：·]|</t[dh]>|<br", match.group(1)) or re.search(r"[,，·/]", match.group(2))
+        re.search(r"[:：·]|</t[dh]>|<br|</p>", match.group(1))
+        or re.search(r"[,，·/]", BRACKETED_RE.sub(" ", match.group(2)))
     )
 
 
 def _mask_names(names: str, *, listed: bool) -> str:
-    return NAME_RE.sub(
-        lambda match: MASK if _is_name(match.group(0), listed=listed) else match.group(0), names
+    # A bracketed tag ("(국악과)", "(1학년)") is not a name.
+    return "".join(
+        part if BRACKETED_RE.fullmatch(part) else NAME_RE.sub(
+            lambda match: MASK if _is_name(match.group(0), listed=listed) else match.group(0), part
+        )
+        for part in re.split(r"(\([^()]*\))", names)
     )
 
 
@@ -253,11 +290,18 @@ def _mask_tables(text: str) -> str:
 def mask_teacher_names(text: str) -> str:
     """Replace the names after every 교사 label and in every teacher column of ``text``."""
 
+    text = SEAL_NAME_RE.sub(
+        lambda match: MASK + match.group(2) if _seal_name(match.group(1)) else match.group(0), text
+    )
     if "교" not in text and "성명" not in text and "담당" not in text:
         return text
     text = LABEL_THEN_NAMES_RE.sub(
         lambda match: match.group(1) + _mask_names(match.group(2), listed=_listed(match)), text
     )
+    for pattern in (PARAGRAPH_LABEL_THEN_NAMES_RE, SPACED_ROW_NAMES_RE):
+        text = pattern.sub(
+            lambda match: match.group(1) + _mask_names(match.group(2), listed=True), text
+        )
     if "<table" in text.lower():
         return _mask_tables(text)
     return _mask_flat_rows(text) if " · " in text else text
@@ -267,7 +311,7 @@ def teacher_names_left(text: str) -> list[str]:
     """Names still standing after a 교사 label or in a teacher column (what the gate rejects)."""
 
     text = text or ""
-    found = []
+    found = [match.group(1) for match in SEAL_NAME_RE.finditer(text) if _seal_name(match.group(1))]
     for table in TABLE_RE.finditer(text):
         for start, end in _teacher_cells(table.group(0)):
             found.extend(_cell_names(table.group(0)[start:end]))
@@ -277,7 +321,18 @@ def teacher_names_left(text: str) -> list[str]:
     for match in LABEL_THEN_NAMES_RE.finditer(text):
         listed = _listed(match)
         found.extend(
-            word for word in NAME_RE.findall(match.group(2)) if _is_name(word, listed=listed)
+            word
+            for word in NAME_RE.findall(BRACKETED_RE.sub(" ", match.group(2)))
+            if _is_name(word, listed=listed)
+        )
+    for match in (
+        *PARAGRAPH_LABEL_THEN_NAMES_RE.finditer(text),
+        *SPACED_ROW_NAMES_RE.finditer(text),
+    ):
+        found.extend(
+            word
+            for word in NAME_RE.findall(BRACKETED_RE.sub(" ", match.group(2)))
+            if _is_name(word, listed=True)
         )
     return found
 

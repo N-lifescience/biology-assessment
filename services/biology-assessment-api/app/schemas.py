@@ -25,6 +25,8 @@ class SubjectItem(StrictModel):
     schools: int
     small_sample: bool
     curriculum_ambiguous: bool
+    # 목록에 실제로 나오는(원문 항목이 확정된) 사례 수. 과목 목록에만 있다.
+    published_documents: int | None = None
 
 
 class SubjectListResponse(StrictModel):

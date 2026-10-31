@@ -2755,3 +2755,483 @@ def test_teacher_names_down_a_merged_column_and_in_flattened_tables_are_masked()
     for word in ("한국사", "성취도", "교무부장", "교장", "진로", "대상 학년"):
         assert word in masked
     assert teacher_names_left(flat) and not teacher_names_left(masked)
+
+
+def test_teacher_names_in_paragraphs_tagged_lists_and_form_samples_are_masked() -> None:
+    from scripts.mask_teacher_names import mask_teacher_names, teacher_names_left
+
+    # 이름은 지어낸 것이다(데이터에 없음을 확인). 2026 2학기 공시에서 새로 본 양식들.
+    samples = {
+        # 제목과 이름이 문단 둘로 갈린 계획서
+        "<p>1. 담당교사</p>\n<p>한도윤</p>\n<p>2. 지도목표</p>": ("한도윤",),
+        # 이름마다 학년·과 꼬리표
+        "<p>1. 담당교사</p>\n<p>오세린 (1학년), 표하람 (2,3학년)</p>": ("오세린", "표하람"),
+        "1. 담당교사 석지안(국악과) 2. 지도목표": ("석지안",),
+        # 쌍점으로 끝난 칸 다음 칸의 이름
+        "<table><tr><td colspan=\"3\">담당교사 :</td><td>한도윤</td></tr></table>": ("한도윤",),
+        # "이수"로 시작하는 이름(이수학점과 다르다)
+        "평가교사 오세린 , 이수림, 표하람 / 평가영역": ("오세린", "이수림", "표하람"),
+        # 일화기록 서식 예시, 보충지도 계획서
+        "평가 및 기록: 교사 석지안<br>번호 | 이름": ("석지안",),
+        "<table><tr><td>운영 필요 시수</td><td>12차시</td><td>보충지도 수업 교사</td>"
+        "<td>한도윤</td></tr></table>": ("한도윤",),
+        # 역할 꼬리표가 붙은 제목, 풀린 표 행 끝까지 띄어 쓴 이름들
+        "<table><tr><th>학점</th><th>3학점</th><th>지도교사(강사)</th>"
+        "<th>오세린</th></tr></table>": ("오세린",),
+        "담당학급 물질과 에너지 수강자 / 담당교사 한도윤 석지안": ("한도윤", "석지안"),
+        # 소제목 다음 문단, 서명 표시, 공동출제교사 열
+        "</table>\n<h4>1. 담당교사</h4>\n<p>한도윤</p>\n<h4>2. 지도목표</h4>": ("한도윤",),
+        "<h4>1. 담당교사</h4>\n<h4>석지안</h4>\n<h4>2. 지도목표</h4>": ("석지안",),
+        "일반계 · 생명과학Ⅱ / 학년 지도교사 / 3학년 / 석지안 (인) / Ⅰ": ("석지안",),
+        "<table><tr><th rowspan=\"2\">학년</th><th rowspan=\"2\">과목</th>"
+        "<th colspan=\"2\">중간고사</th></tr><tr><td>반</td><td>공동출제교사</td></tr>"
+        "<tr><td>3</td><td>문학</td><td>전반</td>"
+        "<td>오세린, 표하람</td></tr></table>": ("오세린", "표하람"),
+    }
+    for text, names in samples.items():
+        masked = mask_teacher_names(text)
+        assert not any(name in masked for name in names), masked
+        assert teacher_names_left(text) and not teacher_names_left(masked)
+    masked = mask_teacher_names("1. 담당교사 석지안(국악과) 2. 지도목표")
+    assert "(국악과)" in masked
+
+    # 문단 다음이 문장이면 이름이 아니다.
+    prose = "<p>지도교사</p><p>학생들의 탐구 과정을 관찰한다.</p> 보충지도 수업 교사 재량에 따라"
+    assert mask_teacher_names(prose) == prose
+    assert mask_teacher_names("이수학점 · 4 · 이수단위 · 2") == "이수학점 · 4 · 이수단위 · 2"
+    # 서식의 빈 서명란은 이름이 아니다.
+    blank_form = "제출 시 성명 (인) 날인, 보호자 (인)"
+    assert mask_teacher_names(blank_form) == blank_form
+
+
+def test_career_biology_courses_are_their_own_sections() -> None:
+    # 2학기 공시의 전교과 PDF(2026-10)처럼 생명과학 바로 뒤에 2022 진로 선택
+    # 「세포와 물질대사」가 이어진다. 그 제목에서 생명과학 구간이 끝나야 하고,
+    # 세포와 물질대사도 자기 구간과 성취기준 코드로 확정돼야 한다.
+    source = """
+# 2026학년도 2학기 (생명과학)과 교수학습 및 평가 운영 계획
+1 (생명과학)과 평가 계획
+<table>
+<tr><th>평가 유형</th><th colspan="2">수행평가</th><th>합계</th></tr>
+<tr><td>반영 비율</td><td colspan="2">100%</td><td>100%</td></tr>
+<tr><td>횟수/영역</td><td>항상성 사례 발표</td><td>유전 형질 분석 보고서</td><td>-</td></tr>
+<tr><td>평가 방법</td><td>발표</td><td>보고서</td><td>-</td></tr>
+<tr><td>교육과정 성취 기준</td><td>[12생과02-03]</td><td>[12생과03-02]</td><td>-</td></tr>
+</table>
+# 2026학년도 2학기 (세포와 물질대사)과 교수학습 및 평가 운영 계획
+1 (세포와 물질대사)과 평가 계획
+<table>
+<tr><th>평가 유형</th><th colspan="2">수행평가</th><th>합계</th></tr>
+<tr><td>반영 비율</td><td colspan="2">100%</td><td>100%</td></tr>
+<tr><td>횟수/영역</td><td>효소 반응 탐구 보고서</td><td>세포 소기관 모형 제작</td><td>-</td></tr>
+<tr><td>평가 방법</td><td>보고서</td><td>제작</td><td>-</td></tr>
+<tr><td>교육과정 성취 기준</td><td>[12세포02-01]</td><td>[12세포01-03]</td><td>-</td></tr>
+</table>
+# 2026학년도 2학기 (생명과학 실험)과 교수학습 및 평가 운영 계획
+<table>
+<tr><th>평가 유형</th><th colspan="2">수행평가</th><th>합계</th></tr>
+<tr><td>횟수/영역</td><td>DNA 추출 실험</td><td>세포 분열 관찰</td><td>-</td></tr>
+<tr><td>교육과정 성취 기준</td><td>[12생실02-01]</td><td>[12생실02-02]</td><td>-</td></tr>
+</table>
+"""
+
+    life = parse_assessment_section(source, "생명과학")
+    life_titles = [item.title for item in life.items if item.extraction_status == "bounded"]
+    assert life_titles == ["항상성 사례 발표", "유전 형질 분석 보고서"]
+    assert "효소 반응" not in life.source_markdown
+
+    cell = parse_assessment_section(source, "세포와 물질대사")
+    assert cell.boundary_status.startswith(("subject_heading:", "subject_heading_exact:"))
+    cell_titles = [item.title for item in cell.items if item.extraction_status == "bounded"]
+    assert cell_titles == ["효소 반응 탐구 보고서", "세포 소기관 모형 제작"]
+    assert "DNA 추출" not in cell.source_markdown
+
+
+def test_new_2022_course_codes_confirm_their_own_course_only() -> None:
+    cell = "[12세포01-01] 탄수화물과 지질의 종류와 주요 기능을 이해하고 관찰할 수 있다."
+    heredity = "[12유전01-01] 유전 형질이 유전자를 통해 자손에게 유전됨을 이해한다."
+
+    assert segment_subject_alignment(cell, "세포와 물질대사") == "expected"
+    assert segment_subject_alignment(heredity, "생물의 유전") == "expected"
+    # 같은 교과군이라 다른 교과 코드로 막지는 않지만, 요청한 과목은 아니다.
+    assert segment_subject_alignment(cell, "생명과학") == "other"
+    assert segment_subject_alignment(heredity, "세포와 물질대사") == "other"
+
+    integrated = "[10통과2-01-01] 지질 시대를 설명한다."
+    assert segment_subject_alignment(integrated, "통합과학2") == "expected"
+    assert segment_subject_alignment(integrated, "통합과학1") == "other"
+    inquiry = "[10과탐2-01-01] 탐구를 설계한다."
+    assert segment_subject_alignment(inquiry, "과학탐구실험2") == "expected"
+    # 2015 모양으로 줄여 쓴 같은 과목 코드는 정확한 코드가 하나라도 있으면 같은 과목이다.
+    abbreviated = "[10통과2-02-01] 생태계를 설명한다. 이외 [10통과02-02~04]"
+    assert segment_subject_alignment(abbreviated, "통합과학2") == "expected"
+
+
+def test_symbol_font_glyphs_become_real_checkboxes_and_digits() -> None:
+    from scripts.normalize_symbol_glyphs import normalize_symbol_glyphs
+
+    from app.repository import display_methods
+
+    # 윙딩스 빈 상자(F06F)와 체크 상자(F0FE): 학교가 고른 방법만 남아야 한다.
+    wingdings = " 서술・논술 ·  실험・실습 ·  토의・토론"
+    assert normalize_symbol_glyphs(wingdings) == "□ 서술・논술 · ☑ 실험・실습 · □ 토의・토론"
+    assert display_methods([normalize_symbol_glyphs(wingdings)]) == ["실험・실습"]
+    # 한컴 기호 글꼴: 빈 상자·체크 상자·가운뎃점.
+    hancom = " 서논술  구술발표  실험실습"
+    assert display_methods([normalize_symbol_glyphs(hancom)]) == ["구술·발표"]
+    # 한컴 수식 글꼴의 숫자와 부호.
+    assert normalize_symbol_glyphs("총합이 점, H 이동") == "총합이 20점, H+ 이동"
+    # 뜻을 모르는 글리프는 지우고, 글자 사이에 끼어 있었으면 가운뎃점으로 둔다.
+    assert normalize_symbol_glyphs("<td></td>") == "<td></td>"
+    assert normalize_symbol_glyphs("시간공간") == "시간·공간"
+    plain = "□ 서술·논술 ☑ 실험·실습"
+    assert normalize_symbol_glyphs(plain) == plain
+
+
+def test_course_codes_belong_to_the_longest_matching_course() -> None:
+    # 2026-11-01 감사: "12생과Ⅱ"는 "12생과"로 시작해도 2022 생명과학이 아니고,
+    # "10통과1"은 2015 통합과학이 아니다. 앞부분만 맞춰 보면 둘 다 통과했다.
+    assert segment_subject_alignment("[12생과Ⅱ01-01] [12생과Ⅱ02-03]", "생명과학") == "other"
+    assert segment_subject_alignment("[12생과II01-01]", "생명과학") == "other"
+    assert segment_subject_alignment("[10통과1-03-03] 탐구", "통합과학") == "other"
+    assert segment_subject_alignment("[10과탐1-02-01] 탐구", "과학탐구실험") == "other"
+    assert segment_subject_alignment("[10통과03-02] 탐구", "통합과학") == "expected"
+    assert segment_subject_alignment("[12생과01-01] 탐구", "생명과학") == "expected"
+    abbreviated = "[10통과1-01-01] 이외 [10통과01-02~04]"
+    assert segment_subject_alignment(abbreviated, "통합과학1") == "expected"
+
+
+def test_course_names_are_matched_as_whole_names() -> None:
+    from scripts.biology_assessment_detail_parser import _names_course
+
+    assert _names_course("2026학년도 (생명과학Ⅱ) 교수학습 계획", ("생명과학",)) is False
+    assert _names_course("[ 통합과학1 ] 교수학습 및 평가 운영 계획", ("통합과학",)) is False
+    assert _names_course("통합과학 1 평가 계획", ("통합과학",)) is False
+    assert _names_course("고급 생명과학 평가 계획", ("생명과학",)) is False
+    assert _names_course("생명과학 실험 평가 계획", ("생명과학",)) is False
+    assert _names_course("(생명과학)_2학년 평가 계획", ("생명과학",)) is True
+    assert _names_course("생명과학과 교수학습·평가 운영 계획", ("생명과학",)) is True
+    # 괄호 속 학년, 두 과목을 함께 적은 파일 이름, 과목명 뒤의 연도
+    assert _names_course("(세포와 물질대사) (2)학년 교수학습", ("세포와물질대사",)) is True
+    assert _names_course("[zip:1학년 통합과학1,2 교과평가계획서.hwp]", ("통합과학1",)) is True
+    dated = "평가운영계획(과학과)2학년_통합과학1(2026년 1학기).hwpx"
+    assert _names_course(dated, ("통합과학1",))
+    assert not _names_course(dated, ("통합과학",))
+
+
+def test_items_whose_own_text_names_another_course_are_not_published() -> None:
+    from scripts.biology_assessment_detail_parser import _names_another_course
+
+    assert _names_another_course("<p>[12생과Ⅱ03-01] 유전자 발현</p>", "생명과학")
+    assert _names_another_course("<p>[10통과1-03-03] 산과 염기</p>", "통합과학")
+    # 형제 과목 코드가 섞여 있으면 학교가 함께 인용한 것이다.
+    assert not _names_another_course("<p>[10통과1-01-01] [10통과2-01-01]</p>", "통합과학2")
+    # 항목 안의 "과목 │ 과학탐구실험2" 칸
+    cover = "<table><tr><td>과목</td><td>과학탐구실험2</td></tr></table>"
+    assert _names_another_course(cover, "생명과학")
+    assert not _names_another_course(cover, "과학탐구실험2")
+    short = "<table><tr><td>과목</td><td>통합과학</td></tr></table>"
+    assert not _names_another_course(short, "통합과학1")
+    # 자기 코드가 있으면 양식을 재사용한 과목명 칸보다 코드를 믿는다.
+    reused = "<table><tr><td>과목명</td><td>생명과학Ⅰ</td></tr></table><p>[12생과01-02]</p>"
+    assert not _names_another_course(reused, "생명과학")
+
+
+@pytest.mark.parametrize(
+    ("raw", "title"),
+    [
+        ("과정중심 수행평가 영역1: 주제탐구보고서(심화탐구영역)", "주제탐구보고서"),
+        ("과정중심 수행평가 영역1: (심화탐구영역) 심화 탐구", "심화 탐구"),
+        ("수행평가 영역2(효소의 활성 실험)", "효소의 활성 실험"),
+        ("평가 과제 2 (자연 선택 과정에 대한 모의실험)", "자연 선택 과정에 대한 모의실험"),
+        ("4순위 수행평가 (자연선택으로 살아남기)", "자연선택으로 살아남기"),
+        ("수행과제 1 -맞춤형 아기 연구 승인 의견 주장하기", "맞춤형 아기 연구 승인 의견 주장하기"),
+        ("항목2 : 방형구법으로 식물군집 분석하기", "방형구법으로 식물군집 분석하기"),
+        ("수행평가 세부 기준 : 효소 활용에 관한 탐구", "효소 활용에 관한 탐구"),
+        ("수행평가 3차 : LMO가 생활에 미치는 영향 논의", "LMO가 생활에 미치는 영향 논의"),
+        ("2.운동관련 안전사고 예방장치 고안하기", "운동관련 안전사고 예방장치 고안하기"),
+        ("영역1 포트폴리오", "포트폴리오"),
+        ("서술형평가 [20점] - 과학적 사례조사", "과학적 사례조사"),
+        ("⚪우리나라로 유입된 외래생물 탐구하기", "우리나라로 유입된 외래생물 탐구하기"),
+        (". 안전사고를 예방하는 구조물 탐구하기", "안전사고를 예방하는 구조물 탐구하기"),
+        ("실험 평가A 1,2 (각 15점, 총 30점)", "실험 평가A 1,2"),
+        ("중화반응 실험 수행하기 (모둠 평가, 10%, 100점)", "중화반응 실험 수행하기"),
+        ("논술형 평가 (1회당 20점, 총 40점) - 2회차", "논술형 평가"),
+        ("원소 주기성 분석 - 반영비율 20%", "원소 주기성 분석"),
+        ("DNA의 반보존적 복제 : 100점, 40%", "DNA의 반보존적 복제"),
+        ("산과 염기의 중화 반응(", "산과 염기의 중화 반응"),
+        ("식물군집 분석(방형구법", "식물군집 분석(방형구법)"),
+        ("효소 활성 영향 요인 실험 및", "효소 활성 영향 요인 실험"),
+        ("생태계 구성 요소 설명하기 · 환경 변화로 생태계 평형이 깨진 사례 조사하기",
+         "생태계 구성 요소 설명하기"),
+        ("산성과 염기성 비교하기 중화 반응 이해하기", "산성과 염기성 비교하기"),
+        ("실험하기 및 보고서 작성하기", "실험하기 및 보고서 작성하기"),
+    ],
+)
+def test_labels_scores_and_cut_ends_leave_the_task_name(raw: str, title: str) -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    assert strip_title_decoration(raw) == title
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "평가 목표",
+        "평가 시 유의점",
+        "평가 주안점",
+        "정기시험(미실시)",
+        "정기시험과 수행평가의 성적 반영 비율, 시기 및 횟수",
+        "환산 점수 (점)",
+        "통합학급 참여 시",
+        "디지털 환경 활용 평가",
+        "※교과특성에 맞춰 편집하여 작성※",
+        "문항 배점 : 다단계 배점",
+        "1학기 수행평가 세부 계획(평가과제별로 작성)",
+        "문제인식 및 가설설정",
+        "결론도출",
+        "결과 정리 및 결론 도출",
+        "5가지 항목을 모두 적절하게 작성",
+        "관련성",
+        "내용 요소",
+        "주제 선정, 내용 구성, 의견 정리 및 완성도",
+        "자기주도성, 성실성, 참여",
+        "과학적 탐구 능력, 과학적 문제 해결 능력, 과학적 참여",
+        "수공적 기능(실험 수행 능력), 과학 탐구 능력(결과 해석, 자료 변환)",
+        "서술형5)",
+        "논서술형16)",
+        "평가과제1(서･논술형, 그 외)",
+        "○○○ 교사(1/4)",
+        "8월~11월",
+        "뭲뗲 骚쑣숲",
+        "수행1 유전 현상 분석 서술형 평가 (15점) 수행2 DNA 돌연변이 현상 분석",
+    ],
+)
+def test_plan_structure_rubric_steps_and_labels_are_not_task_names(title: str) -> None:
+    from scripts.biology_assessment_detail_parser import (
+        _not_a_task_name,
+        _valid_title,
+        heading_title_is_structural,
+        strip_title_decoration,
+    )
+
+    cleaned = strip_title_decoration(title)
+    assert (
+        not _valid_title(cleaned)
+        or heading_title_is_structural(cleaned, policy_prose=False)
+        or _not_a_task_name(cleaned)
+    ), title
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "데이터로 읽는 한반도 기후의 과거, 현재, 그리고 미래",
+        "효소, 세포 호흡, 광합성에서의 생명-화학 융합적 사고",
+        "실험 교사 되어보기",
+        "생태계 구성요소",
+        "핵형분석 및 생식세포의 다양성",
+        "자료해석",
+        "탐구 설계",
+        "실험·실습",
+        "물리 탐구 실험 및 해석: 자유낙하 탐구 실험 및 해석, 실험 탐구 보고서 작성",
+        "서술형평가: 수소와 헬륨, 그들은 어디에서 왔는가?",
+    ],
+)
+def test_school_area_and_task_names_stay(title: str) -> None:
+    from scripts.biology_assessment_detail_parser import _not_a_task_name, strip_title_decoration
+
+    assert not _not_a_task_name(strip_title_decoration(title)), title
+
+
+def test_long_policy_lines_are_document_structure() -> None:
+    assert heading_title_is_structural(
+        "과학의 기본개념을 체계적으로 이해하고, 자연 현상을 탐구하는 능력을 기르기 위하여 지식,"
+    )
+    assert heading_title_is_structural(
+        "과학탐구실험2 교과의 평가는 논술형 평가를 포함한다. 논술형 평가의 반영비율은 학기"
+    )
+
+
+def test_a_name_cut_by_an_angle_bracket_is_not_a_task() -> None:
+    # 학교가 "<생명공학기술>과 관련된 주제를 …"라고 쓰면 꺾쇠가 태그처럼 지워져
+    # 조사로 시작하는 조각이 남는다. 그 조각은 과제명이 아니다.
+    shown = visible_text("- <생명공학기술>과 관련된 주제를 선정하여 탐구하기")
+    assert shown.startswith("과 관련된")
+    assert heading_title_is_structural(shown, policy_prose=False)
+    # 꺾쇠 줄이 다음 과목 계획서 제목으로 읽히지 않게 지운다.
+    assert "교수학습" not in visible_text("※ <교수학습 및 평가방법>은 변경될 수 있음.")
+
+
+def test_written_exam_columns_are_not_tasks() -> None:
+    source = """
+    # 생명과학
+    ## 평가 종류 및 반영 비율
+    <table><tr><th>구분</th><th>선택형 단답형</th><th>논술형</th><th>서술형</th></tr>
+    <tr><td>반영 비율</td><td>40%</td><td>20%</td><td>40%</td></tr></table>
+    """
+    section = parse_assessment_section(source, "생명과학")
+    bounded = [item.title for item in section.items if item.extraction_status == "bounded"]
+    assert "논술형" not in bounded
+
+
+def test_finished_items_drop_header_only_rubrics_impossible_weights_and_cut_sections() -> None:
+    from dataclasses import replace
+
+    from scripts.biology_assessment_detail_parser import ParsedAssessmentItem, _finish_item
+
+    base = ParsedAssessmentItem(
+        order=1, title="유사과학 탐색과 비평", title_raw="1) 유사과학 탐색과 비평(50점)",
+        title_basis="heading", extraction_status="bounded", source_start=0, source_end=0,
+        source_markdown="1) 유사과학 탐색과 비평(50점)\n<table><tr><td>평가 요소</td>"
+        "<td>배점</td></tr><tr><td>유사과학 이해</td><td>15</td></tr></table>",
+        source_html="",
+        rubric_html="<table><tr><td>평가 요소</td><td>배점</td><td>채점 기준</td></tr></table>",
+        overview="", method="", timing="", score="", weight="405", standards=(),
+    )
+    finished = _finish_item(base)
+    assert finished.rubric_html == ""
+    assert finished.weight == ""
+    assert finished.extraction_status == "bounded"
+    real_rubric = (
+        "<table><tr><td>평가 요소</td><td>배점</td></tr><tr><td>이해</td><td>15</td></tr></table>"
+    )
+    kept = _finish_item(replace(base, rubric_html=real_rubric, weight="40%"))
+    assert kept.rubric_html == real_rubric
+    cut = replace(
+        base, title_raw="1. 과학의 단위 및 도량형의 역사 추적하기 프로젝트(30%)",
+        source_markdown=(
+            "1. 과학의 단위 및 도량형의 역사 추적하기 프로젝트(30%)\n##### 평가방법 및 채점기준"
+        ),
+    )
+    assert _finish_item(cut).extraction_status == "bundle_review"
+    pointer = replace(
+        base, source_markdown="1) 대상 독서: 『저도 과학은 어렵습니다만2』\n"
+        "2) 아래의 채점 기준표에서 평가 요소에 해당하는 항목들의 점수를 합산하여 점수를 부여한다.",
+    )
+    assert _finish_item(pointer).extraction_status == "bundle_review"
+    meta_only = replace(
+        base, title_raw="1. 평가 영역: 수업 태도",
+        source_markdown=(
+            "1. 평가 영역: 수업 태도\n2. 반영 비율 및 배점 : 10점(10%)\n4. 평가 시기 : 6월"
+        ),
+    )
+    assert _finish_item(meta_only).extraction_status == "bounded"
+
+
+def test_policy_sentences_are_not_cut_into_task_names() -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    policy = (
+        "‘통합과학1’과 ‘통합과학2’ 교육과정상의 내용 체계와의 관련성을 고려하여 지식 · 이해, "
+        "과정 · 기능, 가치 · 태도를 균형 있게 평가한다."
+    )
+    assert heading_title_is_structural(strip_title_decoration(policy))
+
+
+def test_revised_codes_mixed_into_a_2022_life_science_plan() -> None:
+    # 학교가 2022 생명과학 계획서에 옛 생명과학Ⅰ 코드를 섞어 적은 경우: 자기 코드가
+    # 절반 이상이면 같은 과목, Ⅱ 코드가 대부분이면 생명과학Ⅱ 계획서다.
+    assert segment_subject_alignment("[12생과Ⅰ01-01] [12생과01-02]", "생명과학") == "expected"
+    mostly_two = "[12생과Ⅱ01-01] [12생과Ⅱ01-02] [12생과01-02]"
+    assert segment_subject_alignment(mostly_two, "생명과학") == "other"
+
+
+def test_struck_through_course_names_still_open_the_course() -> None:
+    from scripts.biology_assessment_detail_parser import _names_course
+
+    assert _names_course("1학년 ~~과학탐구실험~~2 학습지도 및 평가계획", ("과학탐구실험2",))
+
+
+def test_new_section_titles_do_not_change_heading_boundaries() -> None:
+    from scripts.biology_assessment_detail_parser import _not_a_task_name, strip_title_decoration
+
+    # "정기 시험, … 성적 처리" 줄은 앞 과제 구간을 끝내는 경계라 머리글 후보로 남는다.
+    boundary = "정기 시험, 수행평가의 미응시자 및 학적 변동자 성적 처리"
+    assert not heading_title_is_structural(boundary, policy_prose=False)
+    # 그래도 과제명으로는 나가지 않는다.
+    assert _not_a_task_name(strip_title_decoration("정기시험(미실시)"))
+    assert _not_a_task_name(strip_title_decoration("과정 중심 수행평가 세부 내용 및"))
+
+
+def test_a_kind_label_before_the_task_gives_way_to_the_task() -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    labelled = "과정중심평가 - 자신의 DNA 추출하여 관찰 및 DNA 추출 원리 이해하기"
+    assert strip_title_decoration(labelled) == "자신의 DNA 추출하여 관찰 및 DNA 추출 원리 이해하기"
+    assert strip_title_decoration("과 학 인포그래픽 제작하기") == "과 학 인포그래픽 제작하기"
+
+
+def test_subtitles_after_a_dash_stay_with_the_name() -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    subtitle = "냉철한 몽상가 프로젝트: 만약의 과학 – 가정적 질문으로 과학현상 귀납추리하기"
+    assert strip_title_decoration(subtitle) == subtitle
+    numbered = "과정형평가1 - 세포 에너지 및 생물 조절 원리 탐구 보고서 작성"
+    assert strip_title_decoration(numbered) == "세포 에너지 및 생물 조절 원리 탐구 보고서 작성"
+
+
+def test_bullet_glyphs_between_words_are_middle_dots() -> None:
+    from scripts.normalize_symbol_glyphs import normalize_symbol_glyphs
+
+    assert normalize_symbol_glyphs(" 서술논술") == "■ 서술·논술"
+    assert normalize_symbol_glyphs("FeO") == "Fe2O3"
+    assert normalize_symbol_glyphs("·  특정 행성") == "· 특정 행성"
+
+
+def test_purpose_clauses_and_wrapped_names_stay_whole() -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    purpose = "식량, 에너지, 환경 문제를 해결하기 위한 연구 계획서 분석하기"
+    assert strip_title_decoration(purpose) == purpose
+    assert strip_title_decoration("(생명 공학 기술 탐구하기) 영역") == "생명 공학 기술 탐구하기"
+
+
+def test_policy_paragraphs_are_not_task_names() -> None:
+    from scripts.biology_assessment_detail_parser import _not_a_task_name
+
+    for line in (
+        "이 외에 수행평가에 관한 세부 방침과 평가 문제 인쇄 및 보안 관리, 평가 시행 및 감독, 채점",
+        "매수행평가실시전학습자가세부평가기준을분명히알수있도록사전에명확하게",
+        "수행평가에서 정의적 영역만 찾아 서술",
+    ):
+        assert _not_a_task_name(line), line
+
+
+def test_2015_bare_courses_reject_numbered_course_evidence() -> None:
+    from scripts.biology_assessment_detail_parser import _names_another_course
+
+    bare_codes = "<p>과목명 과학탐구실험 교육과정 성취기준 10과탐1-01-03 10과탐2-01-03</p>"
+    assert _names_another_course(bare_codes, "과학탐구실험")
+    cover = "<table><tr><td>과목명</td><td>통합과학2</td></tr></table><p>[10통과02-06]</p>"
+    assert _names_another_course(cover, "통합과학")
+    assert _names_another_course("<p>[10과탐01-02] [10과탐1-01-02]</p>", "과학탐구실험")
+    assert not _names_another_course("<p>[10통과03-02] 탐구</p>", "통합과학")
+
+
+def test_items_stop_at_the_next_course_plan_title() -> None:
+    from dataclasses import replace
+
+    from scripts.biology_assessment_detail_parser import (
+        ParsedAssessmentItem,
+        _cut_at_other_course_title,
+    )
+
+    html = (
+        "<h3>바. 우주론과 지구 시스템 과정평가</h3><table><tr><td>채점</td></tr></table>"
+        "<p>결과물이 표절로 판명 날 경우 0점으로 처리함.</p>"
+        "<h2>2026학년도 1학년 1학기</h2><h2>과학탐구실험1과 평가계획</h2><p>다음 과목</p>"
+    )
+    item = ParsedAssessmentItem(
+        order=1, title="우주론과 지구 시스템 과정평가", title_raw="바. 우주론과 지구 시스템",
+        title_basis="table", extraction_status="bounded", source_start=0, source_end=0,
+        source_markdown="", source_html=html, rubric_html="", overview="", method="",
+        timing="", score="", weight="", standards=(),
+    )
+    cut = _cut_at_other_course_title(item, "통합과학1")
+    assert cut.source_html.endswith("0점으로 처리함.</p>")
+    # 자기 과목 소제목("[통합과학1_A]")에서는 끊지 않는다.
+    next_title = "<h2>2026학년도 1학년 1학기</h2><h2>과학탐구실험1과 평가계획</h2>"
+    own = html.replace(next_title, "<h4>[통합과학1_A]</h4>")
+    own_item = replace(item, source_html=own)
+    assert _cut_at_other_course_title(own_item, "통합과학1").source_html == own

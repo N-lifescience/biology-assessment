@@ -25,9 +25,16 @@ def test_specific_alias_wins_over_generic() -> None:
         "과학탐구실험": "과학탐구실험",
         "통합과학1": "통합과학1",
         "통합과학": "통합과학",
-        # Outside the published scope: falls through to the generic bucket
-        # rather than being mislabelled as the 2015 single-course 통합과학.
-        "통합과학2": "과학",
+        # Not the 2015 single-course 통합과학.
+        "통합과학2": "통합과학2",
+        "통합과학Ⅱ": "통합과학2",
+        "과학탐구실험2": "과학탐구실험2",
+        "세포와 물질대사": "세포와 물질대사",
+        "세포와물질대사": "세포와 물질대사",
+        # The course name, not the department word in front of it.
+        "생명과학(세포와 물질대사)": "세포와 물질대사",
+        "생물의 유전": "생물의 유전",
+        "생물의유전": "생물의 유전",
     }
     for name, canonical in expected.items():
         assert manifest.classify(f"{name} 평가계획.hwp")[1] == canonical, name

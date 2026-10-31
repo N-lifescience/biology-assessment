@@ -157,7 +157,8 @@ METHOD_ONLY_NAME_RE = re.compile(
 )
 UNIT_HEADING_RE = re.compile(r"^\s*(?:#{1,6}\s*)?(?:[ⅠⅡⅢⅣⅤⅥ]|[IVX]{1,3}\s*[.．])|단원")
 COURSE_NAME_ONLY_RE = re.compile(
-    r"^(?:(?:통합과학|과학탐구실험|생명과학|고급생명과학|생명과학실험|생물|화학|물리학?|지구과학)"
+    r"^(?:(?:통합과학|과학탐구실험|생명과학|고급생명과학|생명과학실험|세포와물질대사|생물의유전|"
+    r"생물|화학|물리학?|지구과학)"
     r"(?:[12ⅠⅡI]|II)?)+$"
 )
 TITLE_VALUE_STOP_LABELS = {
@@ -345,12 +346,16 @@ STRUCTURAL_EXACT_COMPACT = {
     "행렬",
 }
 # Sibling code prefixes of the same course across curriculum revisions.
+# A 2022 course also cites its numbered sibling ("[10통과1-01-01] [10통과2-01-01]"
+# in one 통합과학1 task); with one of its own codes beside them that is the
+# school's citation, not another course.
 SUBJECT_CODE_FAMILY = {
-    "통합과학1": ("10통과",),
-    "과학탐구실험1": ("10과탐",),
-    "통합과학": ("10통과1",),
-    "과학탐구실험": ("10과탐1",),
+    "통합과학1": ("10통과", "10통과2"),
+    "과학탐구실험1": ("10과탐", "10과탐2"),
+    "통합과학2": ("10통과", "10통과1"),
+    "과학탐구실험2": ("10과탐", "10과탐1"),
 }
+REVISED_CODE_FAMILY = {"생명과학": ("12생과Ⅰ", "12생과Ⅱ")}
 EXPECTED_STANDARD_PREFIXES = {
     # 2015 개정 과학과
     "통합과학": ("10통과",),
@@ -362,8 +367,15 @@ EXPECTED_STANDARD_PREFIXES = {
     # ``subjects_for_standard_codes`` keeps only the longest matching prefix,
     # so the shorter name never absorbs the numbered course.
     "통합과학1": ("10통과1",),
+    "통합과학2": ("10통과2",),
     "과학탐구실험1": ("10과탐1",),
+    "과학탐구실험2": ("10과탐2",),
     "생명과학": ("12생과",),
+    # 2022 진로 선택.  2026학년도 학교알리미 원문의 성취기준 코드로 확인했다
+    # ("[12세포01-01] 탄수화물과 지질의 종류와 주요 기능…",
+    # "[12유전01-01] 유전 형질이 유전자를 통해 자손에게 유전됨을…").
+    "세포와 물질대사": ("12세포",),
+    "생물의 유전": ("12유전",),
     # 과학계열 전문교과.  Prefixes independently re-verified 2026-08-16 against
     # the actual bracket-code achievement-standard listings for each subject's
     # curriculum reference page (2022 개정): "[12생실01-01]"~"[12생실05-08]"
@@ -501,7 +513,13 @@ def subject_code_key(value: str) -> str:
     boundary, so curriculum-code matching preserves those original numerals.
     """
 
-    return re.sub(r"[^0-9A-Za-z가-힣ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]", "", unicodedata.normalize("NFC", value))
+    key = re.sub(r"[^0-9A-Za-z가-힣ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]", "", unicodedata.normalize("NFC", value))
+    # "[12생과II01-02]": a 2015 생명과학Ⅱ code typed with Latin letters.  2022
+    # 생명과학 codes put the area digits right after 생과, so the letters
+    # always mean the course numeral.
+    return re.sub(r"(생과)(II|I)(?=\d|$)", lambda match: match.group(1) + (
+        "Ⅱ" if match.group(2) == "II" else "Ⅰ"
+    ), key)
 
 
 def subjects_for_standard_codes(codes: list[str]) -> set[str]:
@@ -562,6 +580,9 @@ def normalize_checkbox_glyphs(value: str) -> str:
 
 def visible_text(value: str) -> str:
     value = re.sub(r"<br\s*/?>", " ", value, flags=re.I)
+    # "※ <교수학습 및 평가방법>은 …"처럼 학교가 꺾쇠로 쓴 글도 지운다: 남기면 그 줄이
+    # 다음 과목 계획서 제목으로 읽혀 구간이 끊긴다. 꺾쇠가 지운 이름의 나머지
+    # ("과 관련된 주제를 …")는 POLICY_FRAGMENT_START_RE가 과제명에서 거른다.
     value = re.sub(r"<[^>]+>", " ", value)
     value = normalize_checkbox_glyphs(value)
     return re.sub(r"\s+", " ", html.unescape(value)).strip(" |#*:-")
@@ -672,7 +693,7 @@ def subject_local_markdown(full_text: str, subject: str) -> tuple[str, int, int,
         position
         for position, (line_index, name) in enumerate(zip_members)
         if target
-        and any(name_key in _course_key_text(name) for name_key in targets)
+        and _names_course(name, targets)
         and "평가" in compact_text(name)
     ]
     if matching_members:
@@ -763,7 +784,7 @@ def _subject_section_by_mentions(
         )
         course_identity = bool(
             target
-            and any(name in _course_key_text(shown) for name in targets)
+            and _names_course(shown, targets)
             and (title_marker or bool(bracketed_subject.search(shown)))
         )
         # A single-subject plan may name its course only in the cover table
@@ -852,7 +873,7 @@ def _split_course_title_start(
         return None
     previous_raw = lines[previous][2]
     joined = visible_text(previous_raw) + " " + shown
-    if any(name in _course_key_text(joined) for name in targets):
+    if _mentions_course(joined, targets):
         return None
     if (
         COURSE_TITLE_LEAD_RE.match(previous_raw)
@@ -887,12 +908,12 @@ def _line_opens_other_course(raw: str, targets: tuple[str, ...]) -> bool:
         # department's, which holds this course too.
         member = zip_member.group("name")
         return not (
-            any(name in _course_key_text(member) for name in targets)
+            _mentions_course(member, targets)
             or re.search(r"과학\s*(?:과|교과)(?!목)|과학_|과학\s*평가", member)
         )
     shown = visible_text(raw).strip()
     compact = compact_text(shown)
-    if not 6 <= len(compact) <= 90 or any(name in _course_key_text(shown) for name in targets):
+    if not 6 <= len(compact) <= 90 or _mentions_course(shown, targets):
         return False
     # A sentence about the plan ("… 계획에 따라 출제한다.") is not its title.
     if re.search(r"(?:다|함|음)\s*[.。]?$|따라|의거", shown):
@@ -902,7 +923,7 @@ def _line_opens_other_course(raw: str, targets: tuple[str, ...]) -> bool:
     if len(re.findall(r"<th\b", raw, flags=re.I)) < 3 and any(
         len(re.findall(r"[가-힣A-Za-z]", value)) >= 2
         and not re.search(r"(?:학점|시수|시간|학급|교사|학년|학기|구분|단위)\w*$", value)
-        and not any(name in _course_key_text(value) or value in name for name in targets)
+        and not (_mentions_course(value, targets) or any(value in name for name in targets))
         for value in _cover_subject_values(raw)
     ):
         return True
@@ -1099,7 +1120,8 @@ def _subject_targets(subject: str) -> tuple[str, ...]:
 def _subject_spellings(subject: str) -> list[str]:
     """Regex alternatives for a course name as printed, numeral either way."""
 
-    spellings = [re.escape(subject)]
+    # "세포와 물질대사" is also printed "세포와물질대사".
+    spellings = [re.escape(subject).replace(r"\ ", r"\s*")]
     match = re.fullmatch(r"(.+?)\s*([ⅠⅡ12])", subject)
     if match:
         swap = {"Ⅰ": "1", "Ⅱ": "2", "1": "Ⅰ", "2": "Ⅱ"}[match.group(2)]
@@ -1135,7 +1157,53 @@ def _course_key_text(shown: str) -> str:
     "(생명과학)_2학년" must not read as 생명과학2 (= 생명과학Ⅱ).
     """
 
-    return compact_text(re.sub(r"\d\s*(?:학년|학기|차)", " ", shown))
+    # "(세포와 물질대사) (2)학년": 괄호 속 학년 숫자도 지운다.
+    return compact_text(
+        re.sub(r"[(（\[]?\s*\d\s*[)）\]]?\s*(?:학년|학기|차)", " ", shown)
+    )
+
+
+def _names_course(shown: str, targets: tuple[str, ...]) -> bool:
+    """Whether ``shown`` names one of ``targets`` as a whole course name.
+
+    Used where a line *opens* a course's section.  A substring test read
+    "(생명과학Ⅱ)" as 생명과학, "통합과학 1" as the 2015 통합과학 and "고급
+    생명과학" as 생명과학, and so opened the wrong course's section.  A course
+    numeral right after the name (not the start of a longer number such as the
+    year in "통합과학1(2026년 …)"), 실험 or a leading 고급 makes it another course.
+    """
+
+    # "(세포와 물질대사) (2)학년": 괄호 속 학년 숫자도 지운다. 문장부호는 남겨
+    # "통합과학1,2"·"통합과학1(2026년"의 숫자 경계를 본다.
+    key = re.sub(
+        r"[\s~*_`]+",
+        "",
+        unicodedata.normalize(
+            "NFKC", re.sub(r"[(（\[]?\s*\d\s*[)）\]]?\s*(?:학년|학기|차)", " ", shown)
+        ),
+    )
+    for name in targets:
+        start = 0
+        while (at := key.find(name, start)) >= 0:
+            after = key[at + len(name):]
+            numeral = re.match(r"(?:II|I|[12])(?!\d)", after)
+            if not numeral and not after.startswith("실") and not key[:at].endswith("고급"):
+                return True
+            start = at + 1
+    return False
+
+
+def _mentions_course(shown: str, targets: tuple[str, ...]) -> bool:
+    """Whether a line still belongs to this course's section.
+
+    Ending a section is judged loosely, as before: a school that reused a
+    form ("과목명 │ 생명과학Ⅰ" over a 2022 생명과학 plan) must not lose the rest of
+    its plan.  Another course's tasks that ride along are caught by their
+    achievement codes (``_names_another_course``).
+    """
+
+    key = _course_key_text(shown)
+    return any(name in key for name in targets)
 
 
 def _course_in_title(shown: str) -> str:
@@ -1175,7 +1243,7 @@ def _subject_section_end(
             return index
         shown = visible_text(raw)
         compact = compact_text(shown)
-        if any(name in _course_key_text(shown) for name in targets) or not 3 <= len(compact) <= 120:
+        if _mentions_course(shown, targets) or not 3 <= len(compact) <= 120:
             continue
         if _bracketed_course_h1(raw, shown):
             return index
@@ -1493,10 +1561,34 @@ def strip_title_decoration(title: str) -> str:
     """
 
     cleaned = _rejoin_split_syllables(PRIVATE_USE_GLYPH_RE.sub("", title))
-    cleaned = re.sub(r"^[\s•·∙‣▪▫◦●○※*・ㆍ・]+", "", cleaned).strip()
+    # "가. . 실험활동 평가", "⚪우리나라로 유입된 외래생물 탐구하기"
+    cleaned = re.sub(r"^[\s•·∙‣▪▫◦●○⚪⚫◯◎◆◇▶▷►➢※*・ㆍ・.．]+", "", cleaned).strip()
     cleaned = GLUED_META_LABEL_RE.sub("", cleaned).strip()
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:|·")
-    return _strip_name_affixes(cleaned)
+    # 다듬기 전 모양이 문서 구조 제목이면 그대로 둔다: "교육과정 성취기준 및"(평가 기준을
+    # 뗀 소제목)에서 "및"을 지우면 구조 제목 판정을 비켜 과제 머리글로 잡힌다.
+    unmended = _strip_name_affixes(cleaned)
+    if heading_title_is_structural(unmended, policy_prose=False) or (
+        NOT_A_TASK_DOCUMENT_SECTION_RE.search(unmended)
+    ):
+        return unmended
+    return _close_cut_title(_strip_name_affixes(_close_cut_title(cleaned)))
+
+
+def _close_cut_title(title: str) -> str:
+    """Mend a name the source cell cut off: "산과 염기의 중화 반응(",
+    "식물군집 분석(방형구법", "효소 활성 영향 요인 실험 및"."""
+
+    cleaned = title
+    for _ in range(3):
+        before = cleaned
+        # 쉼표로 끝난 줄은 그대로 둔다: 방침 문장이 잘린 표시라 구조 제목 판정이 본다.
+        cleaned = re.sub(r"\s*[(（\[]\s*$|\s+(?:및|또는|와|과)$", "", cleaned).strip()
+        if cleaned.count("(") + cleaned.count("（") > cleaned.count(")") + cleaned.count("）"):
+            cleaned += ")"
+        if cleaned == before:
+            break
+    return cleaned if len(compact_text(cleaned)) >= 2 else title
 
 
 def _rejoin_split_syllables(title: str) -> str:
@@ -1520,6 +1612,16 @@ def _rejoin_split_syllables(title: str) -> str:
 # Notes and labels a school writes around the name in the same cell.  Each
 # is removed only where it sits: a trailing note, a leading label.
 NAME_TRAILING_NOTE_RES = (
+    # "(각 15점, 총 30점)", "(모둠 평가, 10%, 100점)" -- a whole bracket of
+    # scores, taken before the "30점)" rule below can cut it in half.
+    re.compile(r"\s*[(（][^()（）]*\d+\s*(?:점|%)[^()（）]*[)）]\s*$"),
+    # "- 반영비율 20%", ": 100점, 40%", "- 2회차", "(심화탐구영역)", "… 평가 영역"
+    re.compile(r"\s*[-–:：]\s*반영\s*비율\s*\d+(?:\.\d+)?\s*%\s*$"),
+    re.compile(r"\s*[:：]\s*\d+\s*점\s*[,，]\s*\d+(?:\.\d+)?\s*%\s*$"),
+    re.compile(r"\s*[-–]\s*\d+\s*회\s*차\s*$"),
+    re.compile(r"\s*[(（][^()（）]{0,8}영역[)）]\s*$"),
+    re.compile(r"(?<=\S)\s+평가\s*영역(?:별)?\s*$"),
+    re.compile(r"(?<=[)）])\s*영역별?\s*$"),
     # "(수행평가 과제명으로 교육정보시스템에 입력 사항임)", "(관련 성취기준: …)"
     re.compile(r"\s*[(（][^()（）]*(?:입력|기재)\s*(?:사항|함|됨)[^()（）]*[)）]\s*$"),
     re.compile(r"\s*[(（]\s*(?:관련\s*)?성취\s*기준[^()（）]*[)）]?\s*$"),
@@ -1565,7 +1667,18 @@ NAME_LEADING_COUNT_RE = re.compile(
     # "탐구 활동보고서평가1.국립 과천 과학관 …" -- a numbered area label
     r"[^\s.]{0,12}\s?[^\s.]{1,12}평가\s*\d+\s*[.．]\s*|"
     # "수행평가 영역별 세부기준 가. 현상을 꿰뚫는 …" -- the section heading above
-    r"수행\s*평가\s*(?:영역별\s*)?세부\s*(?:계획|기준)\s*(?:[가-하]|\d{1,2})\s*[.)]\s*)(?=\S)"
+    r"수행\s*평가\s*(?:영역별\s*)?세부\s*(?:계획|기준)\s*(?:[가-하]|\d{1,2})\s*[.)]\s*|"
+    # "과정중심 수행평가 영역1:", "수행평가 3차 :", "수행평가 세부 기준 :",
+    # "수행평가 세부계획 5-1.", "수행과제 1 -", "항목1 :", "영역1 포트폴리오",
+    # "서술형평가 [20점] -", and a table cell's own "2. " -- labels and
+    # numbering around the name, not the name.
+    r"(?:과정\s*중심\s*)?수행\s*평가\s*(?:영역\s*)?\d+\s*(?:차\s*)?[:：]\s*|"
+    r"수행\s*평가\s*세부\s*(?:기준|계획)\s*(?:\d+(?:\s*-\s*\d+)?\s*[.)]|[:：])\s*|"
+    r"수행\s*과제\s*\d+\s*[-–:：]\s*|항목\s*\d+\s*[:：]\s*|영역\s*\d+\s+|"
+    r"[^\[\]\s]{0,10}\s?\[\s*\d+\s*점\s*\]\s*[-–:：]\s*|"
+    r"\d{1,2}\s*[.．](?!\d)\s*|"
+    # "(심화탐구영역) 심화 탐구", "(심화탐구) 주제 탐구"
+    r"[(（][^()（）]{0,8}(?:영역|탐구)[)）]\s*)(?=\S)"
 )
 NAME_LEADING_LABEL_RE = re.compile(
     # "평가과제:", "평가과제1(통합과학A):", "수행평가 영역명:", "영역명 :", "[프로젝트명]"
@@ -1575,6 +1688,11 @@ NAME_LEADING_LABEL_RE = re.compile(
 # "평가과제(파스퇴르의 … 구상하기)", "서·논술형수행평가(생물 특성과 …)",
 # "실험·실습 1 (K-POP 속 과학 개념 분석 …)": a label naming only the kind
 # of assessment, with the task itself in brackets.
+# "수행평가 영역1", "평가 과제 2", "4순위 수행평가", "수행평가 3" -- a numbered
+# label whose bracket holds the task.
+NUMBERED_TASK_LABEL_RE = re.compile(
+    r"(?:과정중심)?수행평가(?:영역)?\d+차?|(?:평가|수행)과제\d+|\d+순위수행평가"
+)
 NAME_IN_BRACKETS_RE = re.compile(r"^(?P<label>[^()（）]{1,16}?)\s*[(（](?P<inner>[^()（）]{4,})[)）]$")
 # "Ⅰ. 과학의 본성과 역사 속의 과학 탐구 / 03. 우리 선조들의 과학 기술 발전
 # 사례 찾기": a unit path ending in the task.  The path is the curriculum's;
@@ -1603,13 +1721,21 @@ def _unit_path_task(title: str) -> str | None:
     return ""
 
 
+def _open_brackets(text: str) -> int:
+    return text.count("(") + text.count("（") - text.count(")") - text.count("）")
+
+
 def _strip_name_affixes(title: str) -> str:
     cleaned = title
     for _ in range(3):
         before = cleaned
         for note in NAME_TRAILING_NOTE_RES:
             stripped = note.sub("", cleaned).strip()
-            if len(compact_text(stripped)) >= 2:
+            # A note rule must not cut a bracket in half ("(1회당 20점, 총 40점)"
+            # losing only "40점)").
+            if len(compact_text(stripped)) >= 2 and _open_brackets(stripped) <= max(
+                0, _open_brackets(cleaned)
+            ):
                 cleaned = stripped
         # "탐구 과정 포트폴리오: 15점", "탐구 활동 보고서- 100점", "(20점)," --
         # not "반영 비율 및 배점 : 10점", which is a label line kept whole.
@@ -1653,14 +1779,52 @@ def _strip_name_affixes(title: str) -> str:
         ):
             cleaned = planned.group(1).strip()
         bracketed = NAME_IN_BRACKETS_RE.fullmatch(cleaned)
-        if bracketed and (
+        if bracketed and not re.search(r"\d+\s*(?:점|%)", bracketed.group("inner")) and (
             METHOD_ONLY_NAME_RE.fullmatch(compact_text(bracketed.group("label")))
             or compact_text(bracketed.group("label")) in {"평가과제", "수행과제", "과제"}
+            or NUMBERED_TASK_LABEL_RE.fullmatch(compact_text(bracketed.group("label")))
         ):
             cleaned = bracketed.group("inner").strip()
         unit_task = _unit_path_task(cleaned)
         if unit_task:
             cleaned = unit_task
+        wrapped = re.fullmatch(r"[(（]\s*([^()（）]{4,})\s*[)）]", cleaned)
+        if wrapped:
+            cleaned = wrapped.group(1).strip()
+        # "…산의 성질 탐구자기 주도적 …산의 성질 탐구": a cell read twice.
+        repeated = re.fullmatch(r"(.{6,}?)\s*\1", cleaned)
+        if repeated:
+            cleaned = repeated.group(1).strip()
+        # A name cell that goes on to list the steps ("뉴턴의 프리즘 실험 구현 ·
+        # 실험 결과 …", "… 비교 분석하기 - 분류 형질을 …", "… 비교하기 생식세포
+        # 형성 …"): the first activity is the name, the rest is the overview.
+        steps = re.split(r"\s+[·•\-–]\s+", cleaned)
+        first_activity = re.match(
+            r"(.{6,}?하기)\s+(?!및|와|과|후|또는|하고|위한|위해|위하여|위함|통한|통해|전에|후에|[,，(（])\S",
+            cleaned,
+        )
+        # 문장으로 끝나는 방침 줄("…균형 있게 평가한다.")은 자르지 않는다: 앞 조각만
+        # 남으면 방침 문장 판정을 비켜 과제명으로 나간다.
+        sentence = re.search(r"[가-힣](?:다|함|음)\s*[.。]", cleaned)
+        if sentence:
+            pass
+        elif len(steps) == 2 and re.search(r"평가\d*$", compact_text(steps[0])) and len(
+            compact_text(steps[1])
+        ) >= 6:
+            # "과정중심평가 - 자신의 DNA 추출하여 관찰 …", "과정형평가1 - 세포 에너지 …":
+            # 앞은 평가 종류 라벨이고 뒤가 과제다.
+            cleaned = steps[1].strip()
+        elif (
+            len(cleaned) > 40
+            and len(steps) >= 2
+            and len(compact_text(steps[0])) >= 6
+            # 앞 조각이 활동으로 끝날 때만 단계 나열이다. "냉철한 몽상가 프로젝트: 만약의
+            # 과학 – 가정적 질문을 …"의 " – "는 부제를 잇는다.
+            and re.search(r"(?:하기|보고서|만들기|제작|실험|구현|조사|발표|분석|관찰)$", steps[0].strip())
+        ):
+            cleaned = steps[0].strip()
+        elif first_activity and re.search(r"(?:하기|보고서|만들기)$", cleaned):
+            cleaned = first_activity.group(1).strip()
         if cleaned == before:
             break
     return cleaned
@@ -1848,7 +2012,8 @@ DOCUMENT_SECTION_HEADING_RE = re.compile(
 # A sentence cut off at its first particle ("의 –1점을 부여한다.") or a
 # tie-break/absence rule ("동점자 처리 순위는 …") is a policy line however it ends.
 POLICY_FRAGMENT_START_RE = re.compile(
-    r"^(?:(?:의|을|를|은|는|에|에서)(?:\s+|\s*[-–—])|동점자|결시자|미응시자|평가는\s)"
+    # "과 학 인포그래픽"은 PDF가 "과학"을 띄워 쓴 것이라 조사 조각이 아니다.
+    r"^(?:(?:의|을|를|은|는|에|에서|과(?!\s*학)|와)(?:\s+|\s*[-–—])|동점자|결시자|미응시자|평가는\s)"
 )
 
 
@@ -1869,6 +2034,8 @@ def heading_is_policy_prose(title: str) -> bool:
     clean = re.sub(r"\s*[(（]\s*(?:단|※)[^()（）]*[)）]?\s*[.。]?$", "", clean)
     compact = compact_text(clean)
     if len(compact) >= 12 and SENTENCE_FINAL_HEADING_RE.search(clean):
+        return True
+    if len(compact) >= 15 and re.search(r"[가-힣](?:다|함|음)\.\s+\S", clean):
         return True
     # "… 평가를 진행한다(수행평가 영역별 반영 비율은 평가계획 참고)" -- any
     # trailing note, not only 단/※, can follow the sentence's end.
@@ -1925,6 +2092,9 @@ def heading_title_is_structural(title: str, *, policy_prose: bool = True) -> boo
     """
 
     clean = re.sub(r"\s+", " ", title).strip()
+    # "…탐구하는 능력을 신장시키기 위하여 지식," -- a sentence cut mid-list.
+    if policy_prose and len(compact_text(clean)) >= 20 and re.search(r"[,，]$", clean):
+        return True
     structural_clean = re.sub(r"^(?:\d+|[가-하])\s*[.)]\s*", "", clean)
     structural_clean = re.sub(r"\s*\(※[^)]*\)\s*$", "", structural_clean)
     # PDF/HWP converters frequently leave the comma from a numbered outline
@@ -2082,20 +2252,28 @@ def segment_subject_alignment(segment: str, subject: str) -> str:
         subject_code_key(match)
         for match in re.findall(r"\[\s*((?:10|12)[^\]\-]{1,20})\s*-\s*\d", shown)
     ]
-    expected_prefixes = tuple(subject_code_key(prefix) for prefix in prefixes)
-    if codes and all(
-        any(code.startswith(prefix) for prefix in expected_prefixes) for code in codes
-    ):
+    # Each code belongs to the course of its longest matching prefix: a
+    # ``[12생과Ⅱ…]`` code starts with ``12생과`` but is 생명과학Ⅱ, and
+    # ``[10통과1-…]`` starts with ``10통과`` but is 통합과학1.  A plain prefix
+    # test passed whole 생명과학Ⅱ plans as 2022 생명과학.
+    owners = [subjects_for_standard_codes([code]) for code in codes]
+    if codes and all(subject in owner for owner in owners):
         return "expected"
     # A 2022 course plan often abbreviates its own codes in the 2015 shape
     # ("이외 [10통과01-02~04]" next to "[10통과1-01-01]").  Once at least one
     # code names the requested course exactly, its curriculum-family sibling
     # codes are the same course, not another subject.
-    family = tuple(subject_code_key(prefix) for prefix in SUBJECT_CODE_FAMILY.get(subject, ()))
-    if codes and family and any(
-        any(code.startswith(prefix) for prefix in expected_prefixes) for code in codes
-    ) and all(
-        any(code.startswith(prefix) for prefix in expected_prefixes + family) for code in codes
+    family = subjects_for_standard_codes(list(SUBJECT_CODE_FAMILY.get(subject, ())))
+    if codes and family and any(subject in owner for owner in owners) and all(
+        owner & ({subject} | family) for owner in owners
+    ):
+        return "expected"
+    # 2022 생명과학 계획서에 옛 생명과학Ⅰ·Ⅱ 코드가 섞인 것은 학교의 오기일 수 있다.
+    # 자기 코드가 절반 이상일 때만 같은 과목으로 본다(Ⅱ 코드가 대부분이면 Ⅱ 계획서다).
+    revised = subjects_for_standard_codes(list(REVISED_CODE_FAMILY.get(subject, ())))
+    own_count = sum(subject in owner for owner in owners)
+    if codes and revised and own_count * 2 >= len(codes) and all(
+        owner & ({subject} | revised) for owner in owners
     ):
         return "expected"
     # An explicit achievement-standard code is stronger boundary evidence than
@@ -2104,6 +2282,162 @@ def segment_subject_alignment(segment: str, subject: str) -> str:
     # when the code belongs to a non-biology subject that is intentionally
     # absent from ``EXPECTED_STANDARD_PREFIXES``.
     return "other" if codes else "unknown"
+
+
+OTHER_PLAN_HEADING_RE = re.compile(r"<h[1-6][^>]*>(.*?)</h[1-6]>", re.S)
+
+
+def _names_other_course_plan(heading: str, subject: str) -> bool:
+    """"과학탐구실험1과 평가계획", "생명과학 실험 평가 계획 (3학년)", "[통합과학2_A]"."""
+
+    shown = visible_text(heading)
+    if not (re.search(r"계획|교수|평가", shown) or re.fullmatch(r"\[[^\[\]]{2,20}\]", shown)):
+        return False
+    own = _subject_targets(subject)
+    if _names_course(shown, own):
+        return False
+    return any(
+        _names_course(shown, _subject_targets(course))
+        for course in EXPECTED_STANDARD_PREFIXES
+        if course != subject
+    )
+
+
+def _cut_at_other_course_title(
+    item: ParsedAssessmentItem, subject: str
+) -> ParsedAssessmentItem:
+    """End an item where the next course's plan title shows up inside it.
+
+    The loose end-of-section check keeps a school's reused form together, so
+    the next course's title page ("2026학년도 1학년 1학기" / "과학탐구실험1과
+    평가계획") or its first task ("[통합과학2_A]") can ride at the end of the
+    last item.  The item stops at the first heading of that run, outside tables.
+    """
+
+    if item.extraction_status != "bounded":
+        return item
+    html_text = item.source_html
+    headings = list(OTHER_PLAN_HEADING_RE.finditer(html_text))
+    for position, match in enumerate(headings):
+        if match.start() == 0 or not _names_other_course_plan(match.group(1), subject):
+            continue
+        before = html_text[: match.start()]
+        if before.count("<table") != before.count("</table>"):
+            continue
+        start = match.start()
+        # 바로 앞에 붙은 제목줄("2026학년도 1학년 1학기")도 같은 제목 묶음이다.
+        for previous in reversed(headings[:position]):
+            if html_text[previous.end(): start].strip() or previous.start() == 0:
+                break
+            start = previous.start()
+        cut_html = html_text[:start].rstrip()
+        if len(visible_text(cut_html)) < 20:
+            return item
+        title_line = visible_text(html_text[start: start + 200])[:20]
+        markdown = item.source_markdown
+        at = markdown.find(title_line[:12]) if title_line else -1
+        return replace(
+            item,
+            source_html=cut_html,
+            source_markdown=markdown[:at].rstrip() if at > 0 else markdown,
+        )
+    return item
+
+
+def _finish_item(item: ParsedAssessmentItem) -> ParsedAssessmentItem:
+    """Last checks on what a bounded item shows.
+
+    * A section that holds only its own title and a sub-heading ("1. 과학의
+      단위 … 프로젝트(30%)" / "평가방법 및 채점기준") or that points at "아래의
+      채점 기준표" without any table was cut before its content: it is not
+      shown as a confirmed assessment.
+    * A rubric that kept only its header row ("평가 요소 │ 배점 │ 채점 기준")
+      shows nothing; the source section still carries the school's table.
+    * A 반영 비율 over 100 ("405" for "40%") is a typo, not a weight.
+    """
+
+    if item.extraction_status != "bounded":
+        return item
+    body = visible_text(item.source_markdown)
+    body = body.replace(visible_text(item.title_raw), "", 1)
+    has_table = bool(re.search(r"<table|^\s*\|", item.source_markdown, flags=re.M))
+    # 짧아도 "반영 비율 및 배점 : 10점(10%) … 평가 시기 : 6월"처럼 학교가 적은
+    # 값이 있으면 그대로 둔다.
+    cut_short = len(compact_text(body)) < 40 and not re.search(
+        r"\d+\s*(?:점|%)|[:：]\s*\S{4,}", body
+    )
+    if not has_table and (cut_short or re.search(r"아래(?:의)?\s*채점\s*기준\s*표", body)):
+        return replace(item, extraction_status="bundle_review")
+    rubric_html = item.rubric_html
+    if (
+        rubric_html
+        and len(re.findall(r"<tr\b", rubric_html)) <= 1
+        and RUBRIC_HEADER_WORDS_RE.fullmatch(compact_text(visible_text(rubric_html)))
+    ):
+        rubric_html = ""
+    weight = item.weight
+    values = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", weight)]
+    if values and all(value > 100 for value in values):
+        weight = ""
+    return replace(item, rubric_html=rubric_html, weight=weight)
+
+
+RUBRIC_HEADER_WORDS_RE = re.compile(
+    r"(?:평가|채점|요소|배점|기준|세부|점수|수행|수준|등급|내용|척도|및|영역|항목|만점|비고|구분|부여)+"
+)
+
+
+def _names_another_course(segment: str, subject: str) -> bool:
+    """Whether an item's own text places it in another course.
+
+    Every table scan checks codes its own way; this is the last word for any
+    bounded item.  Its achievement codes all belong to other courses (a 생명과학Ⅱ
+    table filed under 2022 생명과학, a 통합과학1 table under the 2015 통합과학),
+    or its own "과목 │ 과학탐구실험2" cell names another course.  Codes of both
+    courses together are the school's own citation and stay.
+    """
+
+    shown = unicodedata.normalize("NFC", visible_text(segment))
+    codes = [
+        subject_code_key(match)
+        for match in re.findall(r"\[\s*((?:10|12)[^\]\-]{1,20})\s*-\s*\d", shown)
+    ]
+    # 대괄호 없이 적은 코드도 본다: "교육과정 성취기준 10과탐1-01-03".
+    codes += [
+        subject_code_key(match)
+        for match in re.findall(
+            r"(?<![\[0-9A-Za-z가-힣])((?:10|12)[가-힣]{2,4}(?:Ⅰ|Ⅱ|II|I|[12])?\d{0,2})\s*-\s*\d{2}",
+            shown,
+        )
+    ]
+    own = {subject} | subjects_for_standard_codes(list(SUBJECT_CODE_FAMILY.get(subject, ())))
+    owners = [owner for owner in (subjects_for_standard_codes([code]) for code in codes) if owner]
+    if owners and not any(owner & own for owner in owners):
+        return True
+    targets = _subject_targets(subject)
+    other_cover = any(
+        _names_a_course(value)
+        and value not in targets
+        and not _names_course(value, targets)
+        and not any(value in name for name in targets)
+        for value in _cover_subject_values(segment)
+    )
+    # 2015 통합과학·과학탐구실험은 2026학년도에 거의 없다. 2022 번호 과목 코드나 "과목 │
+    # 통합과학2" 칸이 하나라도 있으면 2015 꼴 코드("[10통과02-06]")가 있어도 2022 계획서다.
+    if subject in NUMBERED_SUCCESSORS and (
+        other_cover or any(owner & NUMBERED_SUCCESSORS[subject] for owner in owners)
+    ):
+        return True
+    # 자기 과목 코드가 있으면 양식을 재사용한 "과목명 │ 생명과학Ⅰ" 칸보다 코드를 믿는다.
+    if any(owner & own for owner in owners):
+        return False
+    return other_cover
+
+
+NUMBERED_SUCCESSORS = {
+    "통합과학": {"통합과학1", "통합과학2"},
+    "과학탐구실험": {"과학탐구실험1", "과학탐구실험2"},
+}
 
 
 def explicit_segment_title(segment: str) -> str:
@@ -3709,7 +4043,7 @@ def _joined_units(key: str) -> bool:
 # Cells that label a plan's columns, rows or values rather than name a task.
 NOT_A_TASK_LABEL_RE = re.compile(
     r"^(?:"
-    r"\d{1,2}\s*월(?:\s*\d\s*주)?|\d{1,2}\s*[~∼-]\s*\d{1,2}\s*월|수시|누계|"
+    r"\d{1,2}\s*월(?:\s*\d\s*주)?|\d{1,2}\s*(?:월\s*)?[~∼-]\s*\d{1,2}\s*월|수시|누계|"
     r"(?:총\s*)?\d+\s*(?:회|개\s*항목)|(?:수행|탐구)\s*\d+\s*회|"
     r"(?:수행\s*평가|수행\s*영역|수행|평가\s*과제|활동지|영역)\s*\d+(?:\s*[(（][^()（）]{1,8}[)）])?|"
     r"제\s*\d+\s*영역|교사\s*[A-Z]|[A-Z]\s*/\s*[A-Z]|"
@@ -3760,7 +4094,7 @@ NOT_A_TASK_EXAM_RE = re.compile(
 )
 
 
-GARBLED_TEXT_RE = re.compile("[\uA720-\uA7FF\uA960-\uA97F\uD7B0-\uD7FF]")
+GARBLED_TEXT_RE = re.compile("[\uA720-\uA7FF\uA960-\uA97F\uD7B0-\uD7FF\u3400-\u4DBF\u4E00-\u9FFF]")
 MULTI_TASK_CELL_RE = re.compile(r"\S\s+(?:\d{1,2}\s*\)|\d{1,2}\s*[.．]\s|[②-⑳])\s*\S")
 
 
@@ -3797,7 +4131,86 @@ def _not_a_task_name(title: str) -> bool:
         return True
     if NOT_A_TASK_ELEMENT_RE.search(clean) and not re.search(r"하기$|보고서$|프로젝트$|만들기$", clean):
         return True
-    return False
+    return _not_a_task_name_2026_11(clean, compact)
+
+
+# 2026-11-01 전수 감사에서 과제명으로 나간 것들.
+# 절 제목·방침 줄. 머리글 후보를 고를 때는 쓰지 않는다: "정기 시험, … 성적 처리"
+# 같은 줄은 앞 과제 구간의 끝을 정하는 경계 노릇을 한다.
+NOT_A_TASK_DOCUMENT_SECTION_RE = re.compile(
+    # 2026-11-01 감사에서 과제명으로 나간 절 제목·방침 줄: "평가 목표", "평가 시
+    # 유의점", "평가 주안점", "정기시험(미실시)", "정기시험과 수행평가의 성적 반영
+    # 비율…", "환산 점수 (점)", "통합학급 참여 시", "디지털 환경 활용 평가",
+    # "※교과특성에 맞춰 편집하여 작성※"(양식 안내), "문항 배점 : 다단계 배점".
+    r"^평가\s*(?:목표|주안점)$|유의\s*점$|^정기\s*시험|^환산\s*점수|환산\s*점수\s*\d|"
+    r"통합\s*학급|^디지털\s*(?:교수|환경|학습)|편집하여\s*작성|^※.*※$|^문항\s*배점|"
+    r"^평가\s*요소\s*및\s*수행\s*수준|^성취\s*기준\s*기반\s*평가$|0\s*점\s*처리|"
+    r"^가치\s*및\s*태도|^[‘'\"]?교수\s*[-·‧]?\s*학습\s*[-–]\s*평가\s*방법|없을\s*시|"
+    r"^\d\s*학기\s*수행\s*평가\s*세부\s*계획|평가\s*과제별로\s*작성|"
+    r"^수행\s*평가\s*영역별\s*세부\s*기준|세부\s*내용(?:\s*및(?:\s*평가\s*기준)?)?$|"
+    # "이 외에 수행평가에 관한 세부 방침과 …", "매 수행평가 실시 전 학습자가 … 분명히 알 수
+    # 있도록", "… 평가에 관한 준비", "수행평가에서 정의적 영역만 찾아 서술"
+    r"방침과|평가\s*문제\s*인쇄|보안\s*관리|실시\s*전\s*학습자|분명히\s*알\s*수|"
+    r"평가에\s*관한\s*준비|^수행\s*평가에서\s|^이\s*외에\s"
+)
+
+# 탐구 단계 이름("결론도출", "문제인식 및 가설설정", "탐구 설계")은 채점표의 줄이다.
+# "자료해석", "탐구 설계"처럼 학교가 영역 이름으로도 쓰는 말은 넣지 않는다.
+INQUIRY_STEP_COMPACT_RE = re.compile(
+    r"문제인식(?:및|과|와)?가설설정|(?:실험)?결(?:과|론)도출|결과정리및결론도출|탐구및분석"
+)
+# 채점 문장: "~하는가?", "5가지 항목을 모두 적절하게 작성"
+CRITERION_TEXT_RE = re.compile(
+    # "어디에서 왔는가?"처럼 묻는 과제명은 남긴다: 채점 문장은 "~하였는가?"이거나
+    # 물음 뒤에 다른 기준이 이어진다.
+    r"(?:하였|했|되었)는\s*가\s*\?|는\s*가\s*\?\s*[-–]|"
+    r"(?:적절하게|정확하게|올바르게|충실하게|모두)\s+\S*\s*(?:작성|제시|설명|표현)함?$"
+)
+# 평가 요소 명사: "관련성", "전달력", "내용 요소", "내용의 다양성"
+ELEMENT_NOUN_RE = re.compile(
+    r"^(?:관련성|전달력|독창성|구체성|명확성|표현력)$|완성도$|내용\s*의?\s*다양성$|^내용\s*요소$"
+)
+# 평가 능력 나열: "과학적 탐구 능력, 과학적 문제 해결 능력, 과학적 참여"
+COMPETENCY_PART_RE = re.compile(
+    r"(?:능력|역량|기능|태도|(?<![작구완형육합생편])성|력|참여|해석|쓰기)(?:\s*[(（][^()（）]*[)）])?$"
+)
+# 지필 요약표의 문항 유형: "서술형5)", "논서술형16)"
+EXAM_ITEM_TYPE_RE = re.compile(r"(?:서|논|서논|논서|서[·･・]논)술형\s*\d+\s*\)")
+# "서･논술형, 그 외" -- 쉼표로 늘어놓은 평가 방법뿐. "실험·실습" 하나는 영역 이름이다.
+_METHOD_WORD = r"(?:서[·･・]?논술형?|논술형?|서술형?|구술|발표|토론|토의|실험|실습|그\s*외|기타)"
+METHOD_LIST_RE = re.compile(_METHOD_WORD + r"(?:\s*[,，]\s*" + _METHOD_WORD + r")+")
+
+
+def _top_level_parts(text: str) -> list[str]:
+    parts, depth, current = [], 0, ""
+    for char in text:
+        depth += char in "(（"
+        depth -= char in ")）"
+        if char in ",，" and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    return [*parts, current.strip()]
+
+
+def _not_a_task_name_2026_11(clean: str, compact: str) -> bool:
+    if NOT_A_TASK_DOCUMENT_SECTION_RE.search(clean):
+        return True
+    if INQUIRY_STEP_COMPACT_RE.fullmatch(compact) or CRITERION_TEXT_RE.search(clean):
+        return True
+    if ELEMENT_NOUN_RE.search(clean) or EXAM_ITEM_TYPE_RE.search(clean):
+        return True
+    if METHOD_LIST_RE.fullmatch(clean.strip()):
+        return True
+    # 여러 과제를 한 칸에 적은 것: "수행1 유전 현상 분석 … 수행2 DNA 돌연변이 …"
+    if re.search(r"수행\s*\d.+수행\s*\d", clean):
+        return True
+    # 교사별 시기표 "○○○ 교사(1/4)"
+    if re.search(r"교사\s*[(（]\s*\d\s*/\s*\d", clean):
+        return True
+    parts = _top_level_parts(clean)
+    return len(parts) >= 2 and all(COMPETENCY_PART_RE.search(part) for part in parts if part)
 
 
 
@@ -3813,8 +4226,21 @@ def _named_items(items: list[ParsedAssessmentItem]) -> list[ParsedAssessmentItem
             and not heading_title_is_structural(item.title, policy_prose=False)
             and not is_rubric_criterion_sentence(item.title)
             and not _not_a_task_name(item.title)
+            and not _written_exam_column(item)
+            # 이름 칸에 채점 물음까지 붙은 줄("탐구 결과 공유 및 의사소통 - … 발표하는가?")
+            and not CRITERION_TEXT_RE.search(item.title_raw)
         )
     ]
+
+
+def _written_exam_column(item: ParsedAssessmentItem) -> bool:
+    """"논술형" read from a 지필 summary table ("선택형 단답형 │ 논술형 │ 서술형")."""
+
+    return bool(
+        item.title_basis == "table"
+        and re.fullmatch(r"(?:서|논|서논|논서|서[·･・]\s*논)술형", compact_text(item.title))
+        and re.search(r"선택형|단답형|선다형", visible_text(item.source_markdown))
+    )
 
 
 def _reads_as_task_description(cell: str, heading: str) -> bool:
@@ -4488,7 +4914,12 @@ def parse_assessment_section(
                     unique[twin] = replace(kept, title=item.title, title_raw=item.title_raw)
                 continue
         unique.append(item)
-    items = unique
+    items = [
+        replace(item, extraction_status="source_mismatch_review")
+        if item.extraction_status == "bounded" and _names_another_course(item.source_markdown, subject)
+        else _finish_item(_cut_at_other_course_title(item, subject))
+        for item in unique
+    ]
     items = [replace(item, order=order) for order, item in enumerate(items, 1)]
     # Without a course heading or a 수행평가 heading, the table scans still
     # admit a row only on achievement codes that all belong to this course.

@@ -12,6 +12,8 @@ export type SubjectItem = {
   schools: number;
   small_sample: boolean;
   curriculum_ambiguous: boolean;
+  /** 목록에 실제로 나오는(원문 항목이 확정된) 사례 수. 과목 목록 응답에만 있다. */
+  published_documents?: number | null;
 };
 
 export type ActionTagStat = {

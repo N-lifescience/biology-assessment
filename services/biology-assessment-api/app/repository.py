@@ -13,16 +13,21 @@ from typing import Any
 from app.source_html import restore_escaped_table_rows, rubric_tables_from_source_html
 
 SUBJECT_ORDER = {
-    # 파이프라인 매니페스트가 내는 9개 라벨. 아라비아 숫자는 로마자로 정규화된다.
+    # 파이프라인 매니페스트가 내는 13개 라벨. 생명과학Ⅰ·Ⅱ의 아라비아 숫자는 로마자로
+    # 정규화되고, 2022 공통과목(통합과학1·2, 과학탐구실험1·2)은 아라비아 숫자 그대로다.
     "통합과학": 1,
     "통합과학1": 2,
-    "과학탐구실험": 3,
-    "과학탐구실험1": 4,
-    "생명과학": 5,
-    "생명과학Ⅰ": 6,
-    "생명과학Ⅱ": 7,
-    "생명과학실험": 8,
-    "고급생명과학": 9,
+    "통합과학2": 3,
+    "과학탐구실험": 4,
+    "과학탐구실험1": 5,
+    "과학탐구실험2": 6,
+    "생명과학": 7,
+    "생명과학Ⅰ": 8,
+    "생명과학Ⅱ": 9,
+    "세포와 물질대사": 10,
+    "생물의 유전": 11,
+    "생명과학실험": 12,
+    "고급생명과학": 13,
 }
 CURRICULUM_ORDER = {"2015": 1, "2022": 2, "shared": 3}
 SEARCH_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣ⅠⅡ]+")
@@ -312,7 +317,14 @@ class CatalogRepository:
             parameters = (curriculum,)
         with self.connect() as connection:
             rows = connection.execute(sql, parameters).fetchall()
+            published = self._published_case_counts(connection)
         items = [self._subject_item(row) for row in rows]
+        for item in items:
+            # 목록은 원문 항목이 확정된 사례만 보여 준다. 과목 선택지의 건수도
+            # 그 모수여야 고른 뒤 나오는 건수와 맞는다.
+            item["published_documents"] = published.get(
+                (str(item["curriculum"]), str(item["subject"])), int(item["documents"])
+            )
         return sorted(
             items,
             key=lambda item: (
@@ -966,6 +978,22 @@ class CatalogRepository:
                 [*parameters, limit],
             ).fetchall()
         return [self._case_item(row) for row in rows]
+
+    @staticmethod
+    def _published_case_counts(connection: sqlite3.Connection) -> dict[tuple[str, str], int]:
+        has_items = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'assessment_items'"
+        ).fetchone()
+        if has_items is None:
+            return {}
+        clauses, parameters = CatalogRepository._case_filters(source_status="confirmed")
+        rows = connection.execute(
+            "SELECT c.curriculum, c.subject, COUNT(*) FROM cases c WHERE "
+            + " AND ".join(clauses)
+            + " GROUP BY c.curriculum, c.subject",
+            parameters,
+        ).fetchall()
+        return {(str(row[0]), str(row[1])): int(row[2]) for row in rows}
 
     @staticmethod
     def _subject_item(row: sqlite3.Row) -> dict[str, object]:

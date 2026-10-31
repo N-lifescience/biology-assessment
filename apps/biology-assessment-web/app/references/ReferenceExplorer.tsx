@@ -35,7 +35,7 @@ const CATEGORIES = [
 ] as const;
 
 // 같은 가이드북의 주제(내용) 축 16종. 물리·화학·지구과학 주제도 포함되는데,
-// 통합과학1·과학탐구실험1이 그 내용을 실제로 다루기 때문이다.
+// 통합과학1·2와 과학탐구실험1·2가 그 내용을 실제로 다루기 때문이다.
 const TOPICS = [
   { id: "cell", label: "세포와 물질대사" },
   { id: "genetics", label: "유전" },
@@ -78,7 +78,7 @@ function uniqueSubjectOptions(subjects: SubjectItem[], curriculum: string) {
   const totals = new Map<string, number>();
   for (const item of subjects) {
     if (curriculum && item.curriculum !== curriculum) continue;
-    totals.set(item.subject, (totals.get(item.subject) ?? 0) + item.documents);
+    totals.set(item.subject, (totals.get(item.subject) ?? 0) + (item.published_documents ?? item.documents));
   }
   return [...totals.entries()].map(([subject, documents]) => ({ subject, documents }));
 }

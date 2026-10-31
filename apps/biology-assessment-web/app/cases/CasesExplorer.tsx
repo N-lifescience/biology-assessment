@@ -33,7 +33,8 @@ function uniqueSubjectOptions(subjects: SubjectItem[], curriculum: string) {
   const totals = new Map<string, number>();
   for (const item of subjects) {
     if (curriculum && item.curriculum !== curriculum) continue;
-    totals.set(item.subject, (totals.get(item.subject) ?? 0) + item.documents);
+    // 고른 뒤 나오는 목록과 같은 모수(원문 항목이 확정된 사례)로 센다.
+    totals.set(item.subject, (totals.get(item.subject) ?? 0) + (item.published_documents ?? item.documents));
   }
   return [...totals.entries()].map(([subject, documents]) => ({ subject, documents }));
 }

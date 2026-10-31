@@ -129,7 +129,9 @@ OTHER_DEPARTMENT_NAME_RE = re.compile(
     r"심리|논술|경제|정치|법과|문학|독서|화법|작문|물리|화학|지구과학|성적\s*관리|규정|방과후|"
     r"창체|창의적\s*체험|상업|예체능"
 )
-SCIENCE_NAME_RE = re.compile(r"과학|생명|전\s*과목|전교과|모든\s*교과|공동\s*교육\s*과정|소인수")
+SCIENCE_NAME_RE = re.compile(
+    r"과학|생명|세포\s*와\s*물질\s*대사|생물\s*의\s*유전|전\s*과목|전교과|모든\s*교과|공동\s*교육\s*과정|소인수"
+)
 
 
 def names_only_another_department(row: dict) -> bool:
