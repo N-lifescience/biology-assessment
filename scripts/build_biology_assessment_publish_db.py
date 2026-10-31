@@ -31,7 +31,10 @@ import shutil
 import sqlite3
 import sys
 import time
+import unicodedata
 import zlib
+from dataclasses import replace
+from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -1368,11 +1371,12 @@ def _parse_one_case(
         return
     if not section.items:
         return
+    items = _apply_title_review(case_id, section.items)
     status_rows.append(
         (case_id, source_format, section.boundary_status, len(section.source_markdown))
     )
     first_confirmed = False
-    for order, item in enumerate(section.items, 1):
+    for order, item in enumerate(items, 1):
         item_id = f"{case_id}-{order}"
         item_rows.append(
             (
@@ -1422,6 +1426,60 @@ def _parse_one_case(
     title_basis_updates.append(
         ("source_detail" if first_confirmed else "source_detail_bundle_review", case_id)
     )
+
+
+TITLE_REVIEW_PATH = Path(__file__).resolve().parent / "review" / "title_review.csv"
+
+
+@lru_cache(maxsize=1)
+def _title_review() -> dict[str, dict[str, str]]:
+    """Case-by-case review of titles the parser's rules do not decide.
+
+    ``scripts/review/title_review.csv`` records a step graded inside a task
+    named beside it, the same task named twice in other words, or a label only
+    the case's context gives away; such an item stays in the case, demoted
+    from the confirmed list to review.  A row with ``fixed_name`` instead
+    renames the item to the shorter name the same source gives the task
+    ("혈액형 검사를 통한 혈액형 판별 실험" over the 수행 과제 sentence), which
+    then becomes the overview.
+    """
+
+    if not TITLE_REVIEW_PATH.is_file():
+        return {}
+    reviewed: dict[str, dict[str, str]] = {}
+    with TITLE_REVIEW_PATH.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            reviewed.setdefault(row["case_id"], {})[_review_key(row["title"])] = (
+                row.get("fixed_name") or ""
+            ).strip()
+    return reviewed
+
+
+def _review_key(title: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣ⅠⅡ]", "", unicodedata.normalize("NFKC", title))
+
+
+def _apply_title_review(case_id: str, items: tuple) -> list:
+    reviewed = _title_review().get(case_id, {})
+    applied = []
+    for item in items:
+        key = _review_key(item.title)
+        if item.extraction_status != "bounded" or key not in reviewed:
+            applied.append(item)
+        elif reviewed[key]:
+            applied.append(
+                replace(
+                    item,
+                    title=reviewed[key],
+                    title_raw=reviewed[key],
+                    overview=item.overview or item.title,
+                )
+            )
+        else:
+            applied.append(
+                replace(item, extraction_status="bundle_review", title_basis="reviewed_not_task")
+            )
+    return applied
 
 
 def build(

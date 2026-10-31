@@ -44,6 +44,55 @@ PII_PATTERNS = [
 ]
 
 
+# A teacher's name reaches a task title only through a label line read as a
+# name ("지도교사: 홍길동"); no task is named after its teacher.
+TEACHER_LABEL_TITLE_RE = re.compile(r"(?:지도|담당|수업)?\s*교사\s*[A-Za-z]?\s*[:：]")
+
+
+def assert_titles_name_no_teacher(database: Path) -> None:
+    """No title carries a teacher label, and no published text a teacher's name.
+
+    Every item's source and rubric HTML is published (review items too), so
+    all of them are checked; ``scripts/mask_teacher_names.py`` masks names
+    after a role title ("지도교사: 홍길동") before packaging.
+    """
+
+    from scripts.mask_teacher_names import teacher_names_left
+
+    connection = sqlite3.connect(database)
+    try:
+        titled = [
+            item_id
+            for item_id, title in connection.execute(
+                "SELECT item_id, title FROM assessment_items WHERE extraction_status = 'bounded'"
+            )
+            if TEACHER_LABEL_TITLE_RE.search(title or "")
+        ]
+        named = []
+        for item_id, source, rubric in connection.execute(
+            "SELECT item_id, source_html_zlib, rubric_html_zlib FROM assessment_items"
+        ):
+            for blob in (source, rubric):
+                if blob is not None and teacher_names_left(zlib.decompress(blob).decode("utf-8")):
+                    named.append(item_id)
+                    break
+        named += [
+            case_id
+            for case_id, *texts in connection.execute(
+                "SELECT case_id, evidence_excerpt, summary_overview FROM cases"
+            )
+            if any(teacher_names_left(text or "") for text in texts)
+        ]
+    finally:
+        connection.close()
+    if titled or named:
+        raise RuntimeError(
+            f"personal-data release gate: {len(titled)} title(s) carry a teacher label and "
+            f"{len(named)} published text(s) a teacher's name: {(titled + named)[:5]} "
+            "(run scripts/mask_teacher_names.py)"
+        )
+
+
 def assert_bounded_html_privacy(database: Path) -> None:
     connection = sqlite3.connect(database)
     try:
@@ -78,6 +127,7 @@ def main() -> None:
             "Build the publish pipeline first; refusing to pass without checking anything."
         )
     assert_bounded_html_privacy(arguments.database)
+    assert_titles_name_no_teacher(arguments.database)
 
 
 if __name__ == "__main__":

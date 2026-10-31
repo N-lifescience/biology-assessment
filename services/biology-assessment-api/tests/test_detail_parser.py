@@ -24,6 +24,7 @@ from scripts.biology_assessment_detail_parser import (
     normalize_checkbox_glyphs,
     parse_assessment_section,
     segment_subject_alignment,
+    subject_local_markdown,
     visible_text,
 )
 
@@ -558,7 +559,8 @@ def test_long_task_instruction_does_not_replace_the_source_heading_as_a_title() 
         ),
         (
             "6. 수행평가 세부기준<br>가. 수행평가 1: 이차곡선의 활용 탐구보고서(논술형)",
-            "이차곡선의 활용 탐구보고서(논술형)",
+            # 평가 유형("논술형")은 평가 방법 칸에 따로 보인다.
+            "이차곡선의 활용 탐구보고서",
         ),
         ("4. 포트폴리오 수행평가 기준", "포트폴리오"),
         ("4. 수행평가 영역1 : 서술형 평가", "서술형 평가"),
@@ -1990,9 +1992,12 @@ def test_a_cover_table_course_cell_identifies_a_single_course_plan() -> None:
         "유전자 재조합 모의실험 분석하기"
     ]
     # 다른 과목의 표지 칸("생명과학")이나 머리 행("과목 │ 학급")은 이 과목이 아니다.
-    assert parse_assessment_section(
-        source.replace("생명과학Ⅱ</td><td>학점", "생명과학</td><td>학점"), "생명과학Ⅱ"
-    ).boundary_status.startswith("subject_heading_not_found")
+    other_cover = source.replace("생명과학Ⅱ</td><td>학점", "생명과학</td><td>학점")
+    assert subject_local_markdown(other_cover, "생명과학Ⅱ")[3] == "subject_heading_not_found"
+    # 그래도 행마다 이 과목 성취기준 코드만 있으면 그 코드가 경계다.
+    assert parse_assessment_section(other_cover, "생명과학Ⅱ").boundary_status == (
+        "subject_code_rows:assessment_anchor"
+    )
 
 
 def test_a_course_written_with_an_arabic_numeral_is_the_same_course() -> None:
@@ -2059,3 +2064,694 @@ def test_the_department_title_does_not_close_its_own_course() -> None:
 
     assert "생물 수행평가 세부 계획" in section
     assert "체육 내용" not in section
+
+
+def test_a_course_title_split_over_two_heading_lines_closes_the_course() -> None:
+    # 삼척여고: 다음 과목 제목이 "[프랑스어 독해와 작문Ⅰ]" 줄과 "교수학습·평가 계획서" 줄로 나뉜다.
+    from scripts.biology_assessment_detail_parser import subject_local_markdown
+
+    text = "\n".join(
+        [
+            "# 2026학년도 2학년 2학기 고급생명과학 교수학습·평가 계획서",
+            "생물 수행평가 세부 계획",
+            "# 2026학년도 [2]학년 2학기 [프랑스어 독해와 작문Ⅰ]",
+            "",
+            "# 교수학습·평가 계획서",
+            "프랑스어 내용",
+        ]
+    )
+    section, _, _, _ = subject_local_markdown(text, "고급생명과학")
+
+    assert "생물 수행평가 세부 계획" in section
+    assert "프랑스어" not in section
+
+
+def test_a_rubric_under_a_task_heading_grades_that_task() -> None:
+    # 삼척여고: "1) 배움 기록장 작성하기" 아래 채점표의 평가항목("내용 작성", "태도")은
+    # 그 과제의 채점 요소다. 따로 과제가 되지 않는다.
+    rubric = "".join(
+        f"<tr><td>{element}</td><td>{detail}</td><td>{criterion}</td><td>{score}</td></tr>"
+        for element, detail, criterion, score in (
+            ("내용 작성", "배움 기록장 작성하기", "모두 올바르게 작성함", "50"),
+            ("내용 작성", "배움 기록장 작성하기", "일부를 작성하지 못함", "30"),
+            ("태도", "성실한 참여", "성실하게 참여함", "10"),
+            ("태도", "성실한 참여", "참여가 부족함", "5"),
+        )
+    )
+    source = f"""
+# 2026학년도 2학기 고급생명과학 교수학습·평가 계획서
+## 수행평가 세부 계획
+# 1) 배움 기록장 작성하기
+<table><tr><td>성취기준</td><td>[12고생01-01] 생명 현상을 탐구한다.</td></tr>
+<tr><td>평가방법</td><td>☑ 포트폴리오</td></tr></table>
+<table><tr><th>평가항목</th><th>평가요소</th><th>채점 기준</th><th>배점</th></tr>{rubric}</table>
+# 2) 생명과학 세미나
+<table><tr><td>성취기준</td><td>[12고생02-01] 세포를 탐구한다.</td></tr>
+<tr><td>평가방법</td><td>☑ 구술·발표</td></tr></table>
+"""
+    section = parse_assessment_section(source, "고급생명과학")
+
+    assert [item.title for item in section.items if item.extraction_status == "bounded"] == [
+        "배움 기록장 작성하기",
+        "생명과학 세미나",
+    ]
+
+
+def test_a_rubric_question_is_not_a_task_but_a_question_naming_one_is() -> None:
+    from scripts.biology_assessment_detail_parser import is_rubric_criterion_sentence
+
+    assert is_rubric_criterion_sentence("결과 해석에서 색소 분리와 관련된 문항을 옳게 설명하는가?")
+    assert is_rubric_criterion_sentence("교과와 관련된 내용을 주제로 선정하여 자료 조사를 하는가")
+    assert not is_rubric_criterion_sentence("심폐 조절: 우리 몸은 어떻게 항상성을 유지하는가?")
+    assert not is_rubric_criterion_sentence("서술형평가: 수소와 헬륨, 그들은 어디에서 왔는가?")
+    assert not is_rubric_criterion_sentence("인간은 진화하는가?")
+    assert is_rubric_criterion_sentence(
+        "동물들의 특징을 비교하여 제시된 동물이 어디에 속하는지 옳게 설명하였는가?"
+    )
+
+
+def test_exam_rows_and_exam_section_titles_are_not_tasks() -> None:
+    # 동인고: 글머리 기호(사용자 정의 글자) 뒤 "중간고사 - [12고생01-01~13]".
+    from scripts.biology_assessment_detail_parser import _valid_title, strip_title_decoration
+
+    assert not _valid_title(strip_title_decoration("\U000f02ef중간고사 - [12고생01-01~13]"))
+    assert not _valid_title(strip_title_decoration("\U000f02ef1차 지필고사 - [12생과01-01]~"))
+    assert strip_title_decoration("\U000f02ef자유 탐구 보고서") == "자유 탐구 보고서"
+    # 경동고·반여고: 지필·수행 비율 제목과 끝에 괄호 주석이 붙은 방침 문장.
+    assert heading_title_is_structural("지필고사 및 수행평가 비율")
+    assert heading_title_is_structural(
+        "이 과목은 지필평가 없이 수행평가로 평가를 진행한다(영역별 반영 비율은 평가계획 참고)."
+    )
+    assert not heading_title_is_structural("실험 보고서 작성(관찰 일지 포함)")
+
+
+def test_a_rubric_shared_with_other_courses_is_not_attached_to_the_row() -> None:
+    # 고성고: 생명과학Ⅱ·지구과학Ⅱ·생활과 과학이 한 채점표를 같이 쓴다.
+    source = """
+<table>
+<tr><th>평가 유형</th><th colspan="2">수행평가</th></tr>
+<tr><td>반영비율(%)</td><td colspan="2">100%</td></tr>
+<tr><td>횟수/영역</td><td>탐구 활동지</td><td>탐구보고서</td></tr>
+<tr><td>만점</td><td>100점</td><td>100점</td></tr>
+<tr><td>평가 시기</td><td>수시</td><td>수시</td></tr>
+<tr><td>관련 성취 기준</td><td>[12생과Ⅱ03-01] ~ [12생과Ⅱ03-05]</td>
+<td>[12생과Ⅱ06-01] ~ [12생과Ⅱ06-04]</td></tr>
+</table>
+<table>
+<tr><th>영역</th><th>성취기준</th><th>채점기준</th></tr>
+<tr><td>탐구보고서</td><td>[12생과Ⅱ06-01]</td><td>척도표에 따름</td></tr>
+<tr><td>탐구보고서</td><td>[12지과Ⅱ05-01]</td><td>척도표에 따름</td></tr>
+</table>
+"""
+    section = parse_assessment_section(source, "생명과학Ⅱ")
+    bounded = {item.title: item for item in section.items if item.extraction_status == "bounded"}
+
+    assert "탐구보고서" in bounded
+    assert "12생과Ⅱ06-01" in bounded["탐구보고서"].source_html.replace(" ", "")
+    assert "12지과" not in bounded["탐구보고서"].source_html
+    assert section.boundary_status.startswith("subject_code_rows:")
+
+
+def test_a_scored_heading_names_the_task_over_its_description_cell() -> None:
+    # 전주해성고·청람고 모양: "가. ○○(총 10점)" 아래 수행 과제 칸이 할 일을 쓴 문장이다.
+    source = """
+# 2026학년도 1학기 통합과학1 교수학습·평가 계획
+## 수행평가 세부 계획
+가. 과학융합역량(총 20점)
+<table>
+<tr><td>수행 과제</td>
+<td>생명과학의 주요 발견 중 하나를 선정하여 발견의 시기와 내용, 연구 방법을 조사하기</td></tr>
+<tr><td>성취기준</td><td>[10통과1-01-01] 과학의 발전 과정을 설명한다.</td></tr>
+<tr><td>평가방법</td><td>☑ 구술·발표</td></tr>
+</table>
+"""
+    from scripts.biology_assessment_detail_parser import _reads_as_task_description
+
+    section = parse_assessment_section(source, "통합과학1")
+    bounded = [item for item in section.items if item.extraction_status == "bounded"]
+
+    assert [item.title for item in bounded] == ["과학융합역량"]
+    assert bounded[0].overview.startswith("생명과학의 주요 발견")
+    # 평가 방식만 적은 제목줄("서·논술형 평가")이나 단원 제목은 칸 문장보다 못한 이름이다.
+    sentence = "세포막을 통한 물질 출입 원리를 설명하는 글쓰기"
+    assert not _reads_as_task_description(sentence, "서·논술형 평가")
+    assert not _reads_as_task_description(sentence, "Ⅱ. 물질과 규칙성")
+    assert _reads_as_task_description("· 세포막 모형 만들기 · 삼투 실험하기", "서·논술형 평가")
+
+
+def test_a_named_area_cell_outranks_the_task_description_row() -> None:
+    # 동탄고: 첫 행 "수행평가 영역명 │ 이름 │ 영역 만점 │ 25점", 다음 행 "수행과제 │ 문장".
+    from scripts.biology_assessment_detail_parser import explicit_segment_title
+
+    segment = (
+        "<table><tr><td>수행평가 영역명</td><td>생물의 진화 과정 탐구 포트폴리오 제작하기</td>"
+        "<td>영역 만점</td><td>25점</td></tr>"
+        "<tr><td>수행과제</td>"
+        "<td>세포내공생설을 탐구하고 학습한 내용을 재구성하여 표현하기</td></tr>"
+        "</table>"
+    )
+
+    assert explicit_segment_title(segment) == "생물의 진화 과정 탐구 포트폴리오 제작하기"
+
+
+def test_notes_and_labels_around_a_name_are_not_part_of_it() -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    assert strip_title_decoration(
+        "생물 진화 포트폴리오 (수행평가 과제명으로 교육정보시스템에 입력 사항임)"
+    ) == "생물 진화 포트폴리오"
+    assert strip_title_decoration("효모의 물질대사 탐구 (2순위)") == "효모의 물질대사 탐구"
+    assert strip_title_decoration("조선의 과학기술 원리 찾기[35점]") == "조선의 과학기술 원리 찾기"
+    assert strip_title_decoration("세포 관찰 (관련 성취기준: [12생과01-01])") == "세포 관찰"
+    assert strip_title_decoration("평가과제1(통합과학A): 원소 카드 만들기") == "원소 카드 만들기"
+    assert strip_title_decoration("평가과제(파스퇴르의 실험을 재연하고 분석하기)") == (
+        "파스퇴르의 실험을 재연하고 분석하기"
+    )
+    assert strip_title_decoration("실험·실습 1 (K-POP 속 과학 개념 분석 탐구)") == (
+        "K-POP 속 과학 개념 분석 탐구"
+    )
+    assert strip_title_decoration("탐구 보고서(관찰 일지 포함)") == "탐구 보고서(관찰 일지 포함)"
+    assert strip_title_decoration("PCR (중합효소 연쇄 반응)") == "PCR (중합효소 연쇄 반응)"
+
+
+def test_a_unit_path_is_a_name_only_when_it_ends_in_a_task() -> None:
+    from scripts.biology_assessment_detail_parser import _valid_title, strip_title_decoration
+
+    assert strip_title_decoration(
+        "Ⅰ. 과학의 본성과 역사 속의 과학 탐구 / 03. 우리 선조들의 과학 기술 발전 사례 찾기"
+    ) == "우리 선조들의 과학 기술 발전 사례 찾기"
+    assert not _valid_title("Ⅲ. 시스템과 상호작용 / 3. 생명 시스템 / 02. 정보의 흐름")
+    assert not _valid_title("Ⅱ. 물질의 규칙성 2. 원소의 규칙성 03. 화학 결합에 따른 물질의 성질")
+    assert not _valid_title("Ⅰ-3. 생태계 02. 개체군과 군집의 특성(과학적 사고력, 과학적 탐구능력)")
+
+
+def test_truncated_policy_lines_and_element_lists_are_not_names() -> None:
+    from scripts.biology_assessment_detail_parser import _valid_plan_title
+
+    for line in (
+        "생명과학의 원리가 타 학문과 결합하여 현대 사회의 문제를 해결하거나 새로운 가치를 창출한",
+        "‘생명과학’ 교육과정상의 내용 체계와의 관련성을 고려하여 지식⋅이해, 과정⋅기능,",
+        "평가 방법의 공정성, 객관성이 유지되도록 하며 평가 기준을 사전에 공고하고 공개함으로써",
+        "평가 세부 내용 : 실험, 조사, 발표 등의 방법을 활용하여 교사가 관찰하면서 포착되는 학생의",
+        "학생의 자기주도적 학습 촉진: 학생이 자신의 학습 과정과 결과를 성찰하도록 지원",
+        "과학에 대한 흥미와 가치 인식, 과학 학습 참여의 적극성, 협동성, 창의성",
+        "병원학교 참여 학생 및 장기 결석이 예상되는 학생의 평가 처리 방안",
+        "평가는 수행평가로 실시하고, 수행평가의 영역·방법·횟수·요소·반영 비율",
+    ):
+        # 제목줄로 오든 표 칸으로 오든 이름으로 받지 않는다.
+        assert not _valid_plan_title(line) or heading_title_is_structural(line), line
+    task = "효소의 작용 원리를 이해하고 일상생활에서 활용되는 효소의 사례를 조사하기"
+    assert _valid_plan_title(task) and not heading_title_is_structural(task)
+
+
+def test_a_summary_cell_naming_two_tasks_is_not_a_third_task() -> None:
+    source = """
+# 2026학년도 1학기 생명과학 교수학습·평가 계획
+## 수행평가 세부 계획
+1. 세포 관찰 보고서
+<table><tr><td>성취기준</td><td>[12생과01-01] 세포를 관찰한다.</td></tr>
+<tr><td>평가방법</td><td>☑ 실험·실습</td></tr></table>
+2. 생명과학 성과 발표
+<table><tr><td>성취기준</td><td>[12생과01-02] 성과를 발표한다.</td></tr>
+<tr><td>평가방법</td><td>☑ 구술·발표</td></tr></table>
+<table>
+<tr><th>평가 영역</th><th>반영비율</th><th>평가방법</th></tr>
+<tr><td>세포 관찰 보고서, 생명과학 성과 발표</td><td>40%</td><td>실험, 발표</td></tr>
+</table>
+"""
+    section = parse_assessment_section(source, "생명과학")
+
+    assert [item.title for item in section.items if item.extraction_status == "bounded"] == [
+        "세포 관찰 보고서",
+        "생명과학 성과 발표",
+    ]
+
+
+def test_an_unknown_course_title_split_over_two_plain_lines_closes_the_course() -> None:
+    # 덕암정보고: "2026학년도 1학기 체육(2)과목" 다음 줄 "교수학습 및 평가 운영 계획".
+    from scripts.biology_assessment_detail_parser import subject_local_markdown
+
+    text = "\n".join(
+        [
+            "2026학년도 1학기 통합과학1",
+            "교수학습 및 평가 운영 계획",
+            "통합과학 수행평가 세부 계획",
+            "2026학년도 1학기 정보 처리와 관리",
+            "",
+            "교수학습 및 평가 운영 계획",
+            "워드프로세서 문서 작성하기",
+        ]
+    )
+    section, _, _, _ = subject_local_markdown(text, "통합과학1")
+
+    assert "통합과학 수행평가 세부 계획" in section
+    assert "워드프로세서" not in section
+
+
+def test_one_task_named_two_ways_is_read_once() -> None:
+    from scripts.biology_assessment_detail_parser import _names_a_task_already_read, _title_key
+
+    assert _title_key("탐구평가") == _title_key("탐구")
+    assert _title_key("수행평가") == "수행평가"
+
+    def item(title: str):
+        return type("Item", (), {"title": title, "extraction_status": "bounded"})()
+
+    read = [item("연역적 탐구 기반 실험 보고서 작성"), item("무척추동물 해부 실험 보고서 작성")]
+    assert _names_a_task_already_read(read, item("연역적 탐구 기반 실험보고서 (1회)"))
+    # 청도고: 요약표는 같은 과제를 문장으로 풀어 쓴다.
+    assert _names_a_task_already_read(
+        read,
+        item("‘무척추 동물 해부를 통한 구조와 기능 탐구 실험’의 결과를 정리하고 보고서 작성하기"),
+    )
+    assert not _names_a_task_already_read(read, item("세포 관찰"))
+    assert not _names_a_task_already_read(read, item("척추동물 해부 실험"))
+
+
+def test_graded_elements_in_an_area_column_are_not_tasks() -> None:
+    # 인천포스코고: "영역 │ 평가기준 │ 점수" 표의 첫 열은 채점 요소("주제 선정 (20점)")다.
+    rows = "".join(
+        f"<tr><td>{area}</td><td>{criterion}</td><td>{score}</td></tr>"
+        for area, criterion, score in (
+            ("주제 선정 (20점)", "적절한 주제를 선정함", "20"),
+            ("주제 선정 (20점)", "주제 선정이 미흡함", "10"),
+            ("과학적 분석 (30점)", "원리를 명확하게 이해함", "30"),
+            ("과학적 분석 (30점)", "단편적으로 나열함", "10"),
+        )
+    )
+    source = f"""
+# 2026학년도 2학기 고급생명과학 교수학습·평가 계획
+## 수행평가 영역별 세부 기준
+[12고생04-01] 세포 공학 기술의 활용 사례를 조사한다.
+<table><tr><th>영역</th><th>평가기준</th><th>점수</th></tr>{rows}</table>
+"""
+    section = parse_assessment_section(source, "고급생명과학")
+
+    assert not [item.title for item in section.items if item.extraction_status == "bounded"]
+
+
+def test_tasks_in_an_area_column_count_when_a_plan_table_names_them() -> None:
+    # 대영고: 평가 계획 표와 채점표가 같은 과제명("탐구 보고서 1")을 쓴다.
+    plan = (
+        "<table><tr><th>평가항목</th><th>평가내용 및 방법</th><th>점수</th><th>평가시기</th></tr>"
+        "<tr><td>탐구 보고서 1</td><td>보고서</td><td>10</td><td>4월</td></tr>"
+        "<tr><td>식물도감 제작 프로젝트</td><td>제작</td><td>10</td><td>6월</td></tr></table>"
+    )
+    rubric = "".join(
+        f"<tr><td>{area}</td><td>{criterion}</td><td>{score}</td></tr>"
+        for area, criterion, score in (
+            ("탐구 보고서 1 (10점)", "충실하게 작성함", "10"),
+            ("탐구 보고서 1 (10점)", "미흡함", "5"),
+            ("식물도감 제작 프로젝트 (10점)", "충실하게 제작함", "10"),
+            ("식물도감 제작 프로젝트 (10점)", "미흡함", "5"),
+        )
+    )
+    source = f"""
+# 2026학년도 1학기 생명과학 교수학습·평가 계획
+## 수행평가 세부 기준
+[12생과01-01] 생명 현상을 탐구한다.
+{plan}
+<table><tr><th>평가항목</th><th>평가기준</th><th>배점</th></tr>{rubric}</table>
+"""
+    titles = [
+        item.title
+        for item in parse_assessment_section(source, "생명과학").items
+        if item.extraction_status == "bounded"
+    ]
+
+    assert "탐구 보고서 1" in titles and "식물도감 제작 프로젝트" in titles
+
+
+def test_a_label_value_detail_table_is_not_a_summary_list() -> None:
+    # 조선대부고: "평가영역 │ 만점 │ │ 100점" 상세표의 첫 열(단원, 체크 칸, "방식")은 과제가 아니다.
+    from scripts.biology_assessment_detail_parser import _summary_table_items, _valid_title
+
+    table = (
+        "<table><tr><td>평가영역</td><td>만점</td><td></td><td>100점</td></tr>"
+        "<tr><td>Ⅱ.과학탐구의 과정과 절차</td><td>시기</td><td>3월 4주</td><td></td></tr>"
+        "<tr><td>☑ 서술·논술 유형</td><td>☐ 구술·발표</td><td>☐ 토론·토의</td>"
+        "<td>☐ 프로젝트</td></tr>"
+        "<tr><td>방식</td><td>☑ 개별수행</td><td>☐ 모둠수행</td><td></td></tr></table>"
+    )
+
+    assert not _summary_table_items(table, "과학탐구실험1", "subject_heading_exact", 0)
+    assert not _valid_title("☑ 서술·논술 유형")
+
+
+def test_plan_titles_and_worked_example_headings_are_not_task_names() -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    assert heading_title_is_structural("통합과학D 교수·학습 및 평가 운영 계획")
+    assert heading_title_is_structural("통과A 수행평가 세부 계획")
+    assert strip_title_decoration("교과심화탐구 평가의 실제") == "교과심화탐구"
+    assert strip_title_decoration("1회/ 파스퇴르의 생물속생설 도출 과정 분석하기") == (
+        "파스퇴르의 생물속생설 도출 과정 분석하기"
+    )
+
+
+def test_a_name_cell_outranks_the_area_cell_and_a_summary_row_repeats_the_heading() -> None:
+    # 철성고: 상세표 "평가명 │ …"이 이름이고 "평가 영역 │ 과정평가"는 영역이다.
+    # 요약표의 "과정평가1"은 제목줄 "(1) 과정평가 1"과 같은 과제다.
+    def detail(name: str, code: str) -> str:
+        return (
+            f"<table><tr><td>평가명</td><td>{name}</td></tr>"
+            f"<tr><td>성취기준</td><td>[12생과Ⅱ{code}]</td><td>평가 영역</td><td>과정평가</td></tr>"
+            "<tr><td>평가방법</td><td>탐구 보고서 작성</td></tr></table>"
+        )
+
+    source = f"""
+# 2026학년도 1학기 생명과학Ⅱ 교수학습·평가 계획
+## 수행평가 세부 계획
+<table>
+<tr><td>평가 유형</td><td>수행 평가</td><td>수행 평가</td></tr>
+<tr><td>횟수/영역</td><td>과정평가1</td><td>과정평가2</td></tr>
+<tr><td>영역만점</td><td>100점</td><td>100점</td></tr>
+<tr><td>교육과정 성취기준</td><td>[12생과Ⅱ03-04]</td><td>[12생과Ⅱ01-01]</td></tr>
+</table>
+(1) 과정평가 1
+{detail("실생활 속에서의 발효 이용 사례 조사 및 발표하기", "03-04")}
+(2) 과정평가 2
+{detail("자유 주제 탐구 활동 및 토의하기", "01-01")}
+"""
+    titles = [
+        item.title
+        for item in parse_assessment_section(source, "생명과학Ⅱ").items
+        if item.extraction_status == "bounded"
+    ]
+
+    assert titles == [
+        "실생활 속에서의 발효 이용 사례 조사 및 발표하기",
+        "자유 주제 탐구 활동 및 토의하기",
+    ]
+
+
+def test_kind_labels_and_numbered_area_labels_are_not_part_of_the_name() -> None:
+    from scripts.biology_assessment_detail_parser import strip_title_decoration
+
+    assert strip_title_decoration("생태계 변화 사례 분석 글쓰기 (서·논술형 평가)") == (
+        "생태계 변화 사례 분석 글쓰기"
+    )
+    assert strip_title_decoration("모의 연역적 탐구 실험 설계 [서·논술형], [프로젝트형]") == (
+        "모의 연역적 탐구 실험 설계"
+    )
+    assert strip_title_decoration("탐구 활동보고서평가1.우리 선조들의 과학 기술 찾기") == (
+        "우리 선조들의 과학 기술 찾기"
+    )
+    assert strip_title_decoration("수행평가 영역별 세부기준 가. 과학 스피치") == "과학 스피치"
+    assert strip_title_decoration("PCR (중합효소 연쇄 반응)") == "PCR (중합효소 연쇄 반응)"
+
+
+def test_a_rubric_naming_one_task_or_a_plan_task_in_other_words_is_read() -> None:
+    # 환일고: 채점표 하나에 과제 하나("평가영역 │ 채점 기준 │ 배점").
+    # 성신고: 채점표는 "척추동물 해부", 평가 계획 표는 "척추동물 해부 탐구 보고서".
+    one = "".join(
+        f"<tr><td>원소의 규칙성과 결합 탐구 실험</td><td>{level}</td><td>{score}</td></tr>"
+        for level, score in (("매우 잘함", "10"), ("잘함", "8"), ("보통", "6"))
+    )
+    plan = (
+        "<table><tr><td>평가항목</td><td>척추동물 해부 탐구 보고서</td>"
+        "<td>식물의 DNA추출 탐구 보고서</td></tr>"
+        "<tr><td>반영비율</td><td>30</td><td>40</td></tr>"
+        "<tr><td>평가시기</td><td>3월</td><td>4월</td></tr></table>"
+    )
+    two = "".join(
+        f"<tr><td>{name}</td><td>{criterion}</td><td>{score}</td></tr>"
+        for name, criterion, score in (
+            ("척추동물 해부", "구조를 정확히 설명함", "50"),
+            ("척추동물 해부", "구조를 일부 설명함", "30"),
+            ("식물의 DNA 추출", "과정을 정확히 수행함", "50"),
+            ("식물의 DNA 추출", "과정을 일부 수행함", "30"),
+        )
+    )
+    first = f"""
+# 2026학년도 1학기 통합과학1 교수학습·평가 계획
+## 수행평가 세부 기준
+[10통과1-02-04] 결합의 차이를 설명한다.
+<table><tr><th>평가영역</th><th>채점 기준</th><th>배점</th></tr>{one}</table>
+"""
+    second = f"""
+# 2026학년도 1학기 생명과학실험 교수학습·평가 계획
+## 수행평가 세부 기준
+[12생실01-07] 기관의 구조와 기능을 추론한다.
+{plan}
+<table><tr><th>평가항목</th><th>평가내용 및 채점기준</th><th>점수</th></tr>{two}</table>
+"""
+
+    def bounded(source: str, subject: str) -> list[str]:
+        return [
+            item.title
+            for item in parse_assessment_section(source, subject).items
+            if item.extraction_status == "bounded"
+        ]
+
+    assert bounded(first, "통합과학1") == ["원소의 규칙성과 결합 탐구 실험"]
+    assert bounded(second, "생명과학실험") == ["척추동물 해부", "식물의 DNA 추출"]
+
+
+def test_a_name_under_a_column_header_and_the_sole_table_under_a_task_heading() -> None:
+    from scripts.biology_assessment_detail_parser import explicit_segment_title
+
+    # 태성고: "평가영역명 │ 영역만점 │ 학기" 아래 행이 이름이다.
+    header_table = (
+        "<table><tr><td>평가영역명</td><td>영역만점</td><td>학기</td></tr>"
+        "<tr><td>주기율표의 발전 과정을 탐색하고, 멘델레예프처럼 사고하기</td>"
+        "<td>25</td><td>1학기</td></tr>"
+        "<tr><td>수행과제</td><td>멘델레예프가 주기율표를 만든 과정을 사고하며 설명하기</td></tr>"
+        "</table>"
+    )
+    assert explicit_segment_title(header_table) == (
+        "주기율표의 발전 과정을 탐색하고, 멘델레예프처럼 사고하기"
+    )
+
+    # 인덕과기고: "(1) 탐구활동1" 아래 표 하나의 평가과제 문장은 같은 과제의 설명이다.
+    source = """
+# 2026학년도 1학기 통합과학1 교수학습·평가 계획
+## 수행평가 세부 계획
+(1) 탐구활동1
+<table><tr><td>평가 과제</td><td>분광기를 활용한 물질의 스펙트럼 관찰 분석하기</td></tr>
+<tr><td>성취기준</td><td>[10통과1-01-03] 스펙트럼을 분석한다.</td></tr>
+<tr><td>평가방법</td><td>☑ 실험·실습</td><td>반영비율</td><td>20%</td></tr>
+<tr><td>채점기준</td><td>분석이 정확함</td><td>배점</td><td>20</td></tr></table>
+"""
+    bounded = [
+        item
+        for item in parse_assessment_section(source, "통합과학1").items
+        if item.extraction_status == "bounded"
+    ]
+
+    assert len(bounded) == 1
+    assert "분광기를 활용한" in bounded[0].title + bounded[0].overview
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "생명공학 기술과 인간생활",
+        "물질과 규칙성(화학 결합)",
+        "세포의 특성, 4. 유전자의 발현과 조절",
+        "생명과학의 역사 세포의 특성",
+        "I ~III 단원",
+        "수행영역2",
+        "평가과제3",
+        "5월 4주",
+        "총 1회",
+        "통합과학B",
+        "중 (25∼20점)",
+        "관찰법",
+        "선다형",
+        "1학기 수행평가 시행 계획 및 세부 채점 기준",
+        "결과의 활용",
+        "수행평가 세부 계획에 따름",
+        "하단의 ‘Ⅲ. 수행평가 영역명’ 참고",
+        "2차 시험(중간시험)",
+        "실험 보고서의 체계적 작성 정도",
+        "학습 참여도",
+        "(1) 주제 선정하기",
+        "1단계 탐구 계획 세우기",
+        "지도교사: 홍길동",
+        "주기율표 탐험. 2) 이온 결합의 세계",
+        "성취기준에 기반한 일관성 있는 평가",
+    ],
+)
+def test_plan_labels_units_steps_and_policy_lines_are_not_task_names(title: str) -> None:
+    from scripts.biology_assessment_detail_parser import _not_a_task_name, strip_title_decoration
+
+    assert _not_a_task_name(strip_title_decoration(title)), title
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "생활 속의 과학 탐구",
+        "서술형 평가",
+        "과학의 본성 탐구",
+        "학생 선택형 융합 탐구 프로젝트",
+        "GMO의 유전공학적 원리와 생명공학적 활용",
+        "서술형평가: 수소와 헬륨, 그들은 어디에서 왔는가?",
+        "탐구 보고서 1",
+        "포트폴리오",
+        "세포막을 통한 물질의 이동 실험",
+    ],
+)
+def test_task_names_that_look_like_labels_are_kept(title: str) -> None:
+    from scripts.biology_assessment_detail_parser import _not_a_task_name, strip_title_decoration
+
+    assert not _not_a_task_name(strip_title_decoration(title)), title
+
+
+def test_another_course_opens_on_its_title_line_whatever_its_level() -> None:
+    from scripts.biology_assessment_detail_parser import _line_opens_other_course
+
+    targets = ("통합과학1", "통합과학I")
+    for line in (
+        "2026학년도 1학기 3학년 체육전공 실기기초 교수·학습 및 평가 운영 계획",
+        "## 2026학년도 2학년 1학기 [일본어회화] 교과 공주영명고등학교",
+        "## 1 체육1 교수학습-평가 계획 및 방법",
+        "Ⅰ ( 지구과학Ⅱ )과 교수학습 계획서",
+        "[zip:양서고 1학년 논리와사고 교수학습 계획서.pdf][ok]",
+        "<tr><th colspan=\"3\">2026학년도 1학기 진로와 직업과 평가 계획서</th></tr>",
+    ):
+        assert _line_opens_other_course(line, targets), line
+    for line in (
+        "2026학년도 1학기 [통합과학] 교수학습 및 평가 운영 계획",
+        "2026학년도 1학기 교수학습 및 평가 운영 계획",
+        "## 1 성취기준별 교수학습-평가 방법",
+        "6. 범교과 주제 및 사회정서교육 교수학습 운영 계획",
+        "1 ( 과학과 )과 교수학습-평가 방법",
+        "( 통합과학-물리 ) 과 교수학습-평가 방법",
+        "2026학년도 교수학습 및 평가 계획에 따라 출제한다.",
+        "<tr><td>학습내용</td><td>성취기준</td><td>교수·학습<br>방법</td></tr>",
+        "[zip:과학_2-1. 2026학년도 1학기 과학과 평가계획_0318제출.xlsx][ok]",
+    ):
+        assert not _line_opens_other_course(line, targets), line
+
+
+def test_one_task_spelled_two_ways_but_not_two_tasks_alike() -> None:
+    from scripts.biology_assessment_detail_parser import _same_task_named
+
+    assert _same_task_named("충격을 줄이는 안정장치 고안하기", "충격을 줄이는 안전장치 고안하기")
+    assert _same_task_named("원소의 주기성", "원소의 주기성 탐구")
+    assert _same_task_named("3순위:과학 주제탐구 보고서 작성하기", "과학 주제탐구 보고서 작성하기")
+    assert not _same_task_named("식물 세포 관찰 실험", "동물 세포 관찰 실험")
+    assert not _same_task_named("탐구 보고서 1", "탐구 보고서 2")
+    assert not _same_task_named("스스로 만드는 과학노트Ⅰ", "스스로 만드는 과학노트Ⅱ")
+    assert not _same_task_named("생명과학 포트폴리오", "생명과학 독서 포트폴리오")
+    assert not _same_task_named("카드뉴스 제작", "카드뉴스 제작 후속 탐구 보고서")
+
+
+def test_a_reviewed_title_is_demoted_not_dropped() -> None:
+    from scripts import build_biology_assessment_publish_db as build
+    from scripts.biology_assessment_detail_parser import ParsedAssessmentItem
+
+    item = ParsedAssessmentItem(
+        order=1, title="실험 수행", title_raw="실험 수행", title_basis="table",
+        extraction_status="bounded", source_start=0, source_end=1, source_markdown="",
+        source_html="", rubric_html="", overview="", method="", timing="", score="",
+        weight="", standards=(),
+    )
+    build._title_review.cache_clear()
+    original = build.TITLE_REVIEW_PATH
+    try:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as folder:
+            review = Path(folder) / "title_review.csv"
+            review.write_text(
+                "case_id,title,class,note,fixed_name\n"
+                "case-1,실험 수행,SUBITEM,단계,\n"
+                "case-3,실험 수행,RENAME,이름 칸,효소 실험\n",
+                encoding="utf-8",
+            )
+            build.TITLE_REVIEW_PATH = review
+            build._title_review.cache_clear()
+            demoted = build._apply_title_review("case-1", (item,))
+            untouched = build._apply_title_review("case-2", (item,))
+            renamed = build._apply_title_review("case-3", (item,))
+    finally:
+        build.TITLE_REVIEW_PATH = original
+        build._title_review.cache_clear()
+
+    assert demoted[0].extraction_status == "bundle_review"
+    assert untouched[0].extraction_status == "bounded"
+    assert (renamed[0].title, renamed[0].overview) == ("효소 실험", "실험 수행")
+
+
+def test_teacher_names_after_a_role_title_are_masked_and_nothing_else() -> None:
+    from scripts.mask_teacher_names import mask_teacher_names, teacher_names_left
+
+    # 이름은 지어낸 것이다.
+    text = (
+        "지도교사: 홍길동, 김철수 | 평가교사 이영희 | 공동 채점교사 : 윤서하, 김은정 | "
+        "<td>교과담당교사</td><td>최가람</td> | 담당교사 전원이 공동 출제 | "
+        "교사: 학생 간의 상호작용을 관찰 | 지도교사 허가 절차"
+    )
+    masked = mask_teacher_names(text)
+
+    for name in ("홍길동", "김철수", "이영희", "윤서하", "김은정", "최가람"):
+        assert name not in masked
+    assert "담당교사 전원이" in masked
+    assert "교사: 학생 간의 상호작용을 관찰" in masked
+    assert "지도교사 허가 절차" in masked
+    assert teacher_names_left(text) and not teacher_names_left(masked)
+
+
+def test_teacher_names_in_a_teacher_column_or_row_are_masked() -> None:
+    from scripts.mask_teacher_names import mask_teacher_names, teacher_names_left
+
+    # 이름은 지어낸 것이다.
+    cover = (
+        "<table><tr><th>학교명</th><th>학년</th><th>지도교사</th></tr>"
+        "<tr><td>○○고</td><td>3</td><td>홍길동, 김은정</td></tr></table>"
+    )
+    row = (
+        "<table><tr><td>출제교사</td><td colspan=\"2\">김철수</td>"
+        "<td colspan=\"3\">이영희/ 김철수</td></tr></table>"
+    )
+    plan = (
+        "<table><tr><th>대상</th><th colspan=\"3\">담당 교사</th></tr>"
+        "<tr><td>2</td><td colspan=\"3\">최가람, 장문수</td></tr>"
+        "<tr><td>평가목표</td><td colspan=\"3\">자연 현상에 대한 탐구</td></tr></table>"
+    )
+    for table, names in (
+        (cover, ("홍길동", "김은정")),
+        (row, ("김철수", "이영희")),
+        (plan, ("최가람", "장문수")),
+    ):
+        masked = mask_teacher_names(table)
+        assert not any(name in masked for name in names)
+        assert not teacher_names_left(masked)
+    assert "자연 현상에 대한 탐구" in mask_teacher_names(plan)
+
+
+def test_teacher_names_down_a_merged_column_and_in_flattened_tables_are_masked() -> None:
+    from scripts.mask_teacher_names import mask_teacher_names, teacher_names_left
+
+    # 이름은 지어낸 것이다. 과목 칸이 아래로 병합되고, 이미 가린 칸과
+    # "홍길동(사)"처럼 과목 꼬리표가 붙은 이름이 섞인 표.
+    merged = (
+        "<table><tr><th>학년</th><th>과목</th><th>지도교사</th></tr>"
+        "<tr><td rowspan=\"3\">1</td><td rowspan=\"2\">통합사회</td><td>○○○</td></tr>"
+        "<tr><td>홍길동(사)</td></tr>"
+        "<tr><td>한국사</td><td>김은정</td></tr></table>"
+    )
+    masked = mask_teacher_names(merged)
+    assert "홍길동" not in masked and "김은정" not in masked
+    assert "통합사회" in masked and "한국사" in masked
+    assert not teacher_names_left(masked)
+
+    # 사례 요약에는 표가 " · "(칸)와 " / "(행)로 풀려 있다.
+    flat = (
+        "대상 · 학기 · 주당 수업시수(학점) · 담당 교사 / 2 · 4 · 최가람, 장문수 / "
+        "교과담당교사 · 이영희 · 대상 학년 · 3 / 담당교사 : / 윤서하 / "
+        "학교명 · 학년 · 과목 · 지도교사 / ○○고 · 1학년 · 한국사 / "
+        "대상 · 1학년 · 학점 · 1 · 담당 교사 · 김철수 / "
+        "과목 유형 · 공통 · 석차 등급 · 없음 · 성취도 · 3단계 / "
+        "학년 · 과목유형 · 담당 교사 · 교무부장 · 교장 / 담당교사 / 이수학점 · 4학점 · 편제 · 진로"
+    )
+    masked = mask_teacher_names(flat)
+    for name in ("최가람", "장문수", "이영희", "윤서하", "김철수"):
+        assert name not in masked
+    for word in ("한국사", "성취도", "교무부장", "교장", "진로", "대상 학년"):
+        assert word in masked
+    assert teacher_names_left(flat) and not teacher_names_left(masked)

@@ -99,9 +99,10 @@ def merge(base: Path, addition: Path, output: Path) -> dict:
 def recompute_subject_stats(connection: sqlite3.Connection, added_case_ids: set[str] | None = None) -> None:
     """Recount ``subject_stats``/``subject_action_tags`` over ``cases``.
 
-    ``task_name_candidates`` counted the catalogue's candidates before item
-    parsing replaced them, so it is carried over and only the added cases'
-    task names are added to it.
+    ``task_name_candidates`` is the number of task names the published cases
+    hold.  It once carried over the catalogue's count from before item parsing,
+    which grew stale (and larger than the cases) as the parser dropped names
+    that were not tasks.
     """
 
     added_case_ids = added_case_ids or set()
@@ -146,9 +147,13 @@ def recompute_subject_stats(connection: sqlite3.Connection, added_case_ids: set[
             sum(row["weight_or_points_marker_count"] > 0 for row in rows),
             sum(row["assessment_method_marker_count"] > 0 for row in rows),
             statistics.median(scores) if scores else None,
-            int(previous.get("task_name_candidates") or 0) + sum(
-                len(json.loads(row["task_names_json"] or "[]"))
-                for row in rows if row["case_id"] in added_case_ids or not previous
+            # Counted from the cases as published: the catalogue's own count
+            # included names the detail parser no longer confirms.
+            sum(
+                1
+                for row in rows
+                for name in json.loads(row["task_names_json"] or "[]")
+                if str(name).strip()
             ),
             schools if total else previous.get("coverage_found"),
             ambiguous, not_found, unknown, failed,
