@@ -10,9 +10,8 @@ import re
 import tempfile
 from pathlib import Path
 
-from biology_subject_aliases import SUBJECT_PATTERNS
+from biology_subject_aliases import mention_pattern
 from build_biology_assessment_manifest import classify as classify_filename
-
 
 CODE_KEYS = {
     "통합과학": "통과", "과학탐구실험": "과탐",
@@ -22,13 +21,15 @@ CODE_KEYS = {
     "세포와 물질대사": "세포", "생물의 유전": "유전",
     "생명과학실험": "생실", "고급생명과학": "고생",
 }
+OLD_SHAPE_CODE_KEYS = {
+    "통합과학1": "통과", "통합과학2": "통과", "과학탐구실험1": "과탐", "과학탐구실험2": "과탐",
+}
 
 
 def subject_pattern(subject: str) -> str | None:
-    for _, name, pattern in SUBJECT_PATTERNS:
-        if name == subject:
-            return pattern.removeprefix("(?m)")
-    return None
+    # A 2022 plan's "[과학탐구실험]과 교수학습" heading labels its numbered course.
+    pattern = mention_pattern(subject)
+    return pattern.removeprefix("(?m)") if pattern else None
 
 
 def evidence_strength(record: dict[str, object]) -> tuple[int, list[str]]:
@@ -46,8 +47,13 @@ def evidence_strength(record: dict[str, object]) -> tuple[int, list[str]]:
     if classify_filename(str(source.get("candidate_name") or ""))[1] == subject:
         strength += 5
         reasons.append("filename_alias")
-    code_key = CODE_KEYS.get(subject)
-    if code_key and re.search(rf"\[(?:10|12){re.escape(code_key)}-?\d{{2}}-\d{{2}}\]", text):
+    # A 2022 plan that copied the 2015-shape "[10과탐01-02]" for its numbered
+    # course cites that course too (subject_hits filed the document as 2022).
+    code_keys = [CODE_KEYS.get(subject), OLD_SHAPE_CODE_KEYS.get(subject)]
+    if any(
+        key and re.search(rf"\[(?:10|12){re.escape(key)}-?\d{{2}}-\d{{2}}\]", text)
+        for key in code_keys
+    ):
         strength += 5
         reasons.append("achievement_code")
     label_patterns = (
@@ -55,6 +61,8 @@ def evidence_strength(record: dict[str, object]) -> tuple[int, list[str]]:
         rf"(?m)^\s*(?:#+\s*)?(?:<|\[)?\s*{pattern}\s*(?:>|\])?\s*$",
         rf"\|\s*(?:과목\s*명?|교과\s*목?)\s*\|\s*{pattern}\s*\|",
         rf"(?m)^\s*#+\s*\d{{4}}\s*학년도[^\n]{{0,180}}[<(\[]\s*{pattern}\s*[>)\]][^\n]{{0,120}}평가\s*계획[^\n]*$",
+        # "( 과학탐구실험1 )과 교수학습 및 평가 운영 계획"
+        rf"[<(\[]\s*{pattern}\s*[>)\]]\s*(?:과목|과)?\s*(?:교수|평가\s*(?:운영\s*)?계획)",
     )
     if any(re.search(label, text, flags=re.IGNORECASE) for label in label_patterns):
         strength += 4

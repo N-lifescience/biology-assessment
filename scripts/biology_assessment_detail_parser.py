@@ -12,12 +12,14 @@ import html
 import re
 import unicodedata
 from collections import Counter
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from functools import lru_cache
 from html.parser import HTMLParser as StdlibHTMLParser
 from pathlib import Path
 
+from scripts.biology_subject_aliases import SUBJECT_PATTERNS, numbered_code_subjects
 from scripts.build_biology_assessment_publish_db import html_tables
 
 CONTEXT_JUMP_MARKERS = ("[...문맥 전환...]", "[…문맥 전환…]")
@@ -2268,6 +2270,19 @@ def segment_subject_alignment(segment: str, subject: str) -> str:
         owner & ({subject} | family) for owner in owners
     ):
         return "expected"
+    # 2026 1학년 계획서는 2022 과목에 옛 2015 꼴 코드("[10과탐01-02]")만 적기도 한다
+    # (문화고·경주디자인고). 보통 읽기로 아무것도 안 나와 다시 읽을 때만 같은 과목의 옛
+    # 표기로 친다(``parse_assessment_section``): 옛 코드는 1·2 어느 쪽인지 말하지 않는다.
+    old_shape = next(
+        (bare for bare, numbered in NUMBERED_SUCCESSORS.items() if subject in numbered), None
+    )
+    if (
+        codes
+        and old_shape
+        and _OPENED_BY_NAME.get()
+        and all(owner == {old_shape} for owner in owners)
+    ):
+        return "expected"
     # 2022 생명과학 계획서에 옛 생명과학Ⅰ·Ⅱ 코드가 섞인 것은 학교의 오기일 수 있다.
     # 자기 코드가 절반 이상일 때만 같은 과목으로 본다(Ⅱ 코드가 대부분이면 Ⅱ 계획서다).
     revised = subjects_for_standard_codes(list(REVISED_CODE_FAMILY.get(subject, ())))
@@ -2438,6 +2453,13 @@ NUMBERED_SUCCESSORS = {
     "통합과학": {"통합과학1", "통합과학2"},
     "과학탐구실험": {"과학탐구실험1", "과학탐구실험2"},
 }
+# Whether old-shape codes count as the numbered course: only while
+# ``parse_assessment_section`` re-reads a plan that showed nothing…
+_OPENED_BY_NAME: ContextVar[bool] = ContextVar("_OPENED_BY_NAME", default=False)
+# …and whether they count anywhere in the document (no numbered sibling in it).
+_OLD_SHAPE_ANYWHERE: ContextVar[bool] = ContextVar("_OLD_SHAPE_ANYWHERE", default=False)
+NAME_OPENED_STATUSES = frozenset({"subject_heading", "subject_heading_exact", "zip_member_subject"})
+NUMBERED_COURSES = frozenset().union(*NUMBERED_SUCCESSORS.values())
 
 
 def explicit_segment_title(segment: str) -> str:
@@ -2920,6 +2942,16 @@ def _expected_code_table_items(full_text: str, subject: str) -> list[ParsedAsses
     The title still has to come from an explicit source label.
     """
 
+    # The whole document is scanned, not the section the course's name opened:
+    # old-shape codes count only in a plan with no numbered sibling.
+    opened = _OPENED_BY_NAME.set(_OLD_SHAPE_ANYWHERE.get())
+    try:
+        return _expected_code_tables(full_text, subject)
+    finally:
+        _OPENED_BY_NAME.reset(opened)
+
+
+def _expected_code_tables(full_text: str, subject: str) -> list[ParsedAssessmentItem]:
     output: list[ParsedAssessmentItem] = []
     seen: set[str] = set()
     for start, end, fragment in _table_fragments_with_spans(full_text):
@@ -4606,7 +4638,72 @@ def parse_assessment_section(
 ) -> ParsedAssessmentSection:
     if any(marker in full_text for marker in CONTEXT_JUMP_MARKERS):
         raise ValueError("full source text contains a context-jump marker")
-    subject_markdown, subject_start, _, subject_status = subject_local_markdown(full_text, subject)
+    located = subject_local_markdown(full_text, subject)
+    section = _parse_located_section(full_text, subject, title_hints, *_without_end(located))
+    if subject not in NUMBERED_COURSES or _shown_keys(section):
+        return section
+    # A 2026 1학년 plan may print its 2022 course only short ("[과학탐구실험]") or
+    # cite only the old 2015-shape codes ("[10과탐01-02]").  It is read that way
+    # only when the plain reading shows nothing: a plan that already shows tasks
+    # is never re-cut (reading old codes as the course let a rubric's "관련단원"
+    # and "같은 족" rows join or replace a plan table's names).  Without a
+    # numbered sibling in the document the plan is also read where the short
+    # name (or its old codes) puts it, as the 2015 course used to be.
+    only = _only_numbered_course(full_text, subject)
+    places = [located] if located[3] in NAME_OPENED_STATUSES else []
+    if only:
+        bare = next(bare for bare, numbered in NUMBERED_SUCCESSORS.items() if subject in numbered)
+        places.append(subject_local_markdown(full_text, bare))
+    best, best_keys = section, set()
+    for place in places:
+        opened = _OPENED_BY_NAME.set(True)
+        anywhere = _OLD_SHAPE_ANYWHERE.set(only)
+        try:
+            retry = _parse_located_section(full_text, subject, title_hints, *_without_end(place))
+        finally:
+            _OPENED_BY_NAME.reset(opened)
+            _OLD_SHAPE_ANYWHERE.reset(anywhere)
+        keys = _shown_keys(retry)
+        if len(keys) > len(best_keys):
+            best, best_keys = retry, keys
+    return best
+
+
+def _only_numbered_course(full_text: str, subject: str) -> bool:
+    """Whether the document shows no sign (name or code) of ``subject``'s numbered sibling."""
+
+    short = next(bare for bare, numbered in NUMBERED_SUCCESSORS.items() if subject in numbered)
+    sibling = next(iter(NUMBERED_SUCCESSORS[short] - {subject}))
+    sibling_pattern = dict((name, pattern) for _, name, pattern in SUBJECT_PATTERNS)[sibling]
+    return not (
+        re.search(sibling_pattern, full_text, flags=re.I)
+        or sibling in numbered_code_subjects(full_text)
+    )
+
+
+def _without_end(located: tuple[str, int, int, str]) -> tuple[str, int, str]:
+    markdown, start, _, status = located
+    return markdown, start, status
+
+
+def _shown_keys(section: ParsedAssessmentSection) -> set[str]:
+    """Title keys of the items the site shows."""
+
+    return {
+        _title_key(item.title)
+        for item in section.items
+        if item.extraction_status == "bounded" and item.title_basis in {"table", "heading"}
+    }
+
+
+def _parse_located_section(
+    full_text: str,
+    subject: str,
+    title_hints: tuple[str, ...],
+    subject_markdown: str,
+    subject_start: int,
+    subject_status: str,
+) -> ParsedAssessmentSection:
     block, block_start, block_end, block_status = assessment_block(subject_markdown)
     headings = _heading_candidates(block)
     # A heading printed over every task ("원소 특성 분석과 … 주기율표 제작

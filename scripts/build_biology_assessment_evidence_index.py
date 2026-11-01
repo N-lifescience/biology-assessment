@@ -16,8 +16,8 @@ import re
 import tempfile
 from pathlib import Path
 
-from biology_subject_aliases import SUBJECT_PATTERNS, subject_hits as detect_subject_hits
-
+from biology_subject_aliases import mention_patterns
+from biology_subject_aliases import subject_hits as detect_subject_hits
 
 ASSESSMENT_ANCHORS = re.compile(
     r"수행\s*평가|평가\s*(?:계획|방법|기준|요소|영역)|채점\s*기준|"
@@ -141,19 +141,21 @@ def merged_windows(text: str, positions: list[int], radius: int = 700, cap: int 
     return "\n\n[...문맥 전환...]\n\n".join(parts)
 
 
-def pattern_for(subject: str) -> str | None:
-    for _, known_subject, pattern in SUBJECT_PATTERNS:
-        if known_subject == subject:
-            return pattern
-    return None
+def subject_position(text: str, subject: str, short_form: bool = False) -> int | None:
+    """Prefer a subject occurrence that is nearest to assessment-plan content.
 
-
-def subject_position(text: str, subject: str) -> int | None:
-    """Prefer a subject occurrence that is nearest to assessment-plan content."""
-    pattern = pattern_for(subject)
-    if not pattern:
+    Spellings are tried in order ("통합과학1", then "통합과학 1"/"통합과학Ⅰ",
+    then the short "[통합과학]" of a 2022 plan that never prints the number);
+    ``short_form`` looks only at the short one.
+    """
+    spellings = mention_patterns(subject)
+    if not spellings:
         return None
-    matches = list(re.finditer(pattern, text, flags=re.IGNORECASE))
+    matches: list[re.Match[str]] = []
+    for pattern in spellings[-1:] if short_form else spellings:
+        matches = list(re.finditer(pattern, text, flags=re.IGNORECASE))
+        if matches:
+            break
     if not matches:
         return None
     anchors = [match.start() for match in ASSESSMENT_ANCHORS.finditer(text)]
@@ -224,50 +226,65 @@ def evidence_records(record: dict[str, object]) -> list[dict[str, object]]:
         position = subject_position(text, subject)
         if position is None:
             continue
-        start, end, boundary_method = subject_section(text, position)
-        local = text[start:end]
-        task_local, task_boundary_method = performance_task_text(local)
-        task_names = task_name_candidates(task_local)
-        anchor_positions = selected_anchor_positions(local, position - start)
-        snippets = merged_windows(local, anchor_positions, radius=650, cap=12000)
-        action_tags = detected_action_tags(task_local, assume_task_context=task_boundary_method != "full_subject_section")
-        marker_counts = {
-            "performance_assessment": len(re.findall(r"수행\s*평가", local)),
-            "rubric": len(re.findall(r"평가\s*기준|채점\s*기준|루브릭", local)),
-            "achievement_standard": len(re.findall(r"성취\s*기준", local)),
-            "weight_or_points": len(re.findall(r"반영\s*비율|배점", local)),
-            "assessment_method": len(re.findall(r"평가\s*방법|평가\s*요소", local)),
-        }
-        score = (
-            min(marker_counts["performance_assessment"], 3) * 3
-            + min(marker_counts["rubric"], 3) * 2
-            + min(marker_counts["achievement_standard"], 3) * 2
-            + min(marker_counts["weight_or_points"], 2)
-            + min(marker_counts["assessment_method"], 2) * 2
-            + min(len(action_tags), 5)
-        )
-        if record.get("extract_status") != "ok":
-            score -= 8
-        source = record.get("source") or {}
-        results.append({
-            "source": source,
-            "sha256": record.get("sha256", ""),
-            "extract_status": record.get("extract_status"),
-            "char_count": record.get("char_count", 0),
-            "section_char_count": len(local),
-            "section_boundary_method": boundary_method,
-            "task_section_char_count": len(task_local),
-            "task_section_boundary_method": task_boundary_method,
-            "task_name_candidates": task_names,
-            "curriculum_hint": curriculum,
-            "subject": subject,
-            "curriculum_code_hints": record.get("curriculum_code_hints") or [],
-            "marker_counts": marker_counts,
-            "action_tags": action_tags,
-            "evidence_score": score,
-            "evidence_text": snippets,
-        })
+        positions = [position]
+        if len(mention_patterns(subject)) > 1:
+            # "1. 통합과학1 ····" may be a table of contents while the plan itself
+            # is headed with the short "# 통합과학".  Both are offered; the strict
+            # shortlist keeps the better-evidenced record of a document's course.
+            short = subject_position(text, subject, short_form=True)
+            if short is not None and short != position:
+                positions.append(short)
+        for position in positions:
+            results.append(_evidence_record(record, text, subject, curriculum, position))
     return results
+
+
+def _evidence_record(
+    record: dict[str, object], text: str, subject: str, curriculum: str, position: int
+) -> dict[str, object]:
+    start, end, boundary_method = subject_section(text, position)
+    local = text[start:end]
+    task_local, task_boundary_method = performance_task_text(local)
+    task_names = task_name_candidates(task_local)
+    anchor_positions = selected_anchor_positions(local, position - start)
+    snippets = merged_windows(local, anchor_positions, radius=650, cap=12000)
+    action_tags = detected_action_tags(task_local, assume_task_context=task_boundary_method != "full_subject_section")
+    marker_counts = {
+        "performance_assessment": len(re.findall(r"수행\s*평가", local)),
+        "rubric": len(re.findall(r"평가\s*기준|채점\s*기준|루브릭", local)),
+        "achievement_standard": len(re.findall(r"성취\s*기준", local)),
+        "weight_or_points": len(re.findall(r"반영\s*비율|배점", local)),
+        "assessment_method": len(re.findall(r"평가\s*방법|평가\s*요소", local)),
+    }
+    score = (
+        min(marker_counts["performance_assessment"], 3) * 3
+        + min(marker_counts["rubric"], 3) * 2
+        + min(marker_counts["achievement_standard"], 3) * 2
+        + min(marker_counts["weight_or_points"], 2)
+        + min(marker_counts["assessment_method"], 2) * 2
+        + min(len(action_tags), 5)
+    )
+    if record.get("extract_status") != "ok":
+        score -= 8
+    source = record.get("source") or {}
+    return {
+        "source": source,
+        "sha256": record.get("sha256", ""),
+        "extract_status": record.get("extract_status"),
+        "char_count": record.get("char_count", 0),
+        "section_char_count": len(local),
+        "section_boundary_method": boundary_method,
+        "task_section_char_count": len(task_local),
+        "task_section_boundary_method": task_boundary_method,
+        "task_name_candidates": task_names,
+        "curriculum_hint": curriculum,
+        "subject": subject,
+        "curriculum_code_hints": record.get("curriculum_code_hints") or [],
+        "marker_counts": marker_counts,
+        "action_tags": action_tags,
+        "evidence_score": score,
+        "evidence_text": snippets,
+    }
 
 
 def _legacy_evidence_record(record: dict[str, object]) -> dict[str, object]:

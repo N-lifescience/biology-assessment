@@ -3235,3 +3235,52 @@ def test_items_stop_at_the_next_course_plan_title() -> None:
     own = html.replace(next_title, "<h4>[통합과학1_A]</h4>")
     own_item = replace(item, source_html=own)
     assert _cut_at_other_course_title(own_item, "통합과학1").source_html == own
+
+
+# 2026 1학년(2022) 계획서가 옛 2015 꼴 코드만 적거나 과목을 "[과학탐구실험]"으로만 쓴 경우
+# (문화고·경주디자인고·순심고 모양).
+_OLD_SHAPE_PLAN = """
+# 2026학년도 1학기 {heading}과 교수학습 및 평가 계획
+| 학년 | 담당 |
+| --- | --- |
+| 1학년 | 김○○ |
+# 평가 계획
+<table>
+<tr><th>평가 유형</th><th colspan="2">수행평가</th><th>합계</th></tr>
+<tr><td>반영 비율</td><td colspan="2">100%</td><td>100%</td></tr>
+<tr><td>횟수/영역</td><td>주제별 탐구보고서 작성하기</td>
+<td>전형원소 인포그래픽 제작하기</td><td>-</td></tr>
+<tr><td>평가 방법</td><td>보고서</td><td>프로젝트</td><td>-</td></tr>
+<tr><td>교육과정 성취 기준</td><td>[10과탐01-01]</td><td>[10과탐02-03]</td><td>-</td></tr>
+</table>
+{tail}
+"""
+
+
+def _bounded_titles(source: str, subject: str) -> list[str]:
+    section = parse_assessment_section(source, subject)
+    return [item.title for item in section.items if item.extraction_status == "bounded"]
+
+
+def test_old_shape_codes_belong_to_the_course_whose_name_opened_the_section() -> None:
+    source = _OLD_SHAPE_PLAN.format(heading="(과학탐구실험1)", tail="")
+
+    assert _bounded_titles(source, "과학탐구실험1") == [
+        "주제별 탐구보고서 작성하기",
+        "전형원소 인포그래픽 제작하기",
+    ]
+    # Found by codes alone, an old code does not say 1 or 2.
+    assert _bounded_titles(source, "과학탐구실험2") == []
+    assert segment_subject_alignment("[10과탐01-02] 만 있는 구간", "과학탐구실험1") == "other"
+
+
+def test_short_course_heading_opens_the_only_numbered_course_of_the_plan() -> None:
+    source = _OLD_SHAPE_PLAN.format(heading="[과학탐구실험]", tail="")
+
+    assert _bounded_titles(source, "과학탐구실험1") == [
+        "주제별 탐구보고서 작성하기",
+        "전형원소 인포그래픽 제작하기",
+    ]
+    # A plan that also has 과학탐구실험2 cannot say which course "[과학탐구실험]" is.
+    both = _OLD_SHAPE_PLAN.format(heading="[과학탐구실험]", tail="2학기: [10과탐2-01-01] 계획 별도")
+    assert _bounded_titles(both, "과학탐구실험1") == []
