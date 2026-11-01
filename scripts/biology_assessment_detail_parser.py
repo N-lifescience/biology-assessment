@@ -2369,6 +2369,9 @@ def _finish_item(item: ParsedAssessmentItem) -> ParsedAssessmentItem:
     * A rubric that kept only its header row ("평가 요소 │ 배점 │ 채점 기준")
       shows nothing; the source section still carries the school's table.
     * A 반영 비율 over 100 ("405" for "40%") is a typo, not a weight.
+    * 배점·반영 cells keep only scores: a rubric's level column ("35 32 29 26
+      23 20") or a criterion sentence read along with the score ("실험 기구의
+      사용법을 5가지 이상 설명할 수 있다. · 25점") is not one.
     """
 
     if item.extraction_status != "bounded":
@@ -2390,11 +2393,50 @@ def _finish_item(item: ParsedAssessmentItem) -> ParsedAssessmentItem:
         and RUBRIC_HEADER_WORDS_RE.fullmatch(compact_text(visible_text(rubric_html)))
     ):
         rubric_html = ""
-    weight = item.weight
+    weight = _score_only(item.weight)
     values = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", weight)]
     if values and all(value > 100 for value in values):
         weight = ""
-    return replace(item, rubric_html=rubric_html, weight=weight)
+    return replace(item, rubric_html=rubric_html, weight=weight, score=_score_only(item.score))
+
+
+# Words a score cell may carry beside its numbers ("총 20점", "서･논술형 25점", "1회/2단계").
+SCORE_UNIT_WORDS_RE = re.compile(
+    r"만점|배점|반영|비율|총점?|차시|차|회|단계|학기|점|개별|모둠|서[･·]?논술형?|서술형|논술형|선택형|"
+    r"약|이상|이하|각|씩|주|월|년|분|문항|개|등급|단위|기본|평가|수행|지필|중간|기말|고사"
+)
+# A criterion, a policy note or the template's own guidance, not a score.
+SCORE_PROSE_RE = re.compile(
+    r"경우|수\s*있|하였|했|한다|하다|된다|있다|없다|[가-힣](?:함|됨|음)(?![가-힣])|부여|감점|"
+    r"정도에\s*따라|\[\s*1[02]|\d+\s*%\s*이[상하]|\d+\s*(?:개|가지)\s*이[상하]|기본\s*점수|※|"
+    r"작성\s*권장|단계로\s*작성|기대\s*수행|성취\s*수준별|명시|참고|따름|따른다|규정"
+)
+SCORE_TAIL_RE = re.compile(r"\(?\s*(?:총\s*)?(\d+(?:\.\d+)?\s*(?:점|%))\s*\)?\s*$")
+
+
+def _score_only(value: str) -> str:
+    """The scores of a 배점·반영 cell, without a rubric's level column or criterion text."""
+
+    tokens = value.split()
+    if (
+        len(tokens) >= 4
+        and all(re.fullmatch(r"\d{1,3}점?", token) for token in tokens)
+        and all(int(a.rstrip("점")) > int(b.rstrip("점")) for a, b in zip(tokens, tokens[1:]))
+    ):
+        return ""
+    kept = []
+    for part in (part.strip() for part in value.split(" · ")):
+        if not re.search(r"\d", part):
+            continue
+        rest = re.sub(r"[\d\s.,~/()（）%:+\-·×xX]", "", SCORE_UNIT_WORDS_RE.sub("", part))
+        if len(re.findall(r"[가-힣]", rest)) > 25 or SCORE_PROSE_RE.search(part):
+            # "20점(기본점수 10점)": the score leads and the note follows.
+            lead = re.match(r"\s*(\d+(?:\.\d+)?\s*점)\s*[(（]", part)
+            tail = None if re.search(r"기본\s*점수", part) else SCORE_TAIL_RE.search(part)
+            part = lead.group(1) if lead else tail.group(1) if tail else ""
+        if part:
+            kept.append(part)
+    return " · ".join(kept)
 
 
 RUBRIC_HEADER_WORDS_RE = re.compile(

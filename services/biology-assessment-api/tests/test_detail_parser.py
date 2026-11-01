@@ -17,6 +17,7 @@
 import pytest
 from scripts.biology_assessment_detail_parser import (
     _field_value_is_usable,
+    _score_only,
     balance_table_tags,
     biology_standard_codes,
     heading_title_is_structural,
@@ -3284,3 +3285,25 @@ def test_short_course_heading_opens_the_only_numbered_course_of_the_plan() -> No
     # A plan that also has 과학탐구실험2 cannot say which course "[과학탐구실험]" is.
     both = _OLD_SHAPE_PLAN.format(heading="[과학탐구실험]", tail="2학기: [10과탐2-01-01] 계획 별도")
     assert _bounded_titles(both, "과학탐구실험1") == []
+
+
+def test_score_cells_keep_only_scores() -> None:
+    # A rubric's level column read as the score.
+    assert _score_only("35 32 29 26 23 20") == ""
+    assert _score_only("50점 47점 44점 41점 38점") == ""
+    # Criterion text or a base-score note read along with the score.
+    assert _score_only("실험 기구의 사용법을 5가지 이상 설명할 수 있다. · 25점") == "25점"
+    assert _score_only("포트폴리오 작성 오류가 20% 이하인 경우 · 60") == "60"
+    assert _score_only("100 · 기본점수(수행평가 미응시, 결과물 미제출): 33") == "100"
+    assert _score_only("20점(기본점수 10점)") == "20점"
+    assert _score_only("성취수준별 예상 득점 및 수행 특성(※ 고1, 2 작성 권장) · 50점") == "50점"
+    assert _score_only("[12생과Ⅱ05-01] 원시 세포의 탄생 과정을 알고 논증할 수 있다. · 25") == "25"
+    # A school's own breakdown stays.
+    for kept in (
+        "총 20점 · 서술·논술 15점 · 포트폴리오 5점",
+        "10% · 1회/2단계 · 4차시",
+        "과학기술 활용 웹앱 만들기 (30점) · 아이디어 도출(10)",
+        "40 30 30",
+        "25점 (서･논술형 25점) · 25점",
+    ):
+        assert _score_only(kept) == kept
